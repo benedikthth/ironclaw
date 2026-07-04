@@ -52,15 +52,16 @@ def reviewed_run(
 
     for round_i in range(max_rounds):
         attempt_task = _with_feedback(task, feedback) if feedback else task
-        ws = os.path.join(workspace, f"round_{round_i}")
-        result = phd_run(attempt_task, ws)
+        # Review rounds iterate in place (shared workspace) so a re-run sees its
+        # own prior artifacts plus the postdoc's feedback.
+        result = phd_run(attempt_task, workspace)
 
         if result.status is not TaskStatus.PASSED:
             # Didn't clear the objective floor — a Senior matter, not a quality
             # review. Pass it up untouched (budget exhaustion etc.).
             return result
 
-        review = reviewer(task, result, ws)
+        review = reviewer(task, result, workspace)
         active_recorder().emit(
             "review", role="postdoc", task_id=task.id, message=review.verdict.value,
             data={"round": round_i, "flag": review.flag.value if review.flag else None},

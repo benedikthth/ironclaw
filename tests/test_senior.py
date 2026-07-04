@@ -81,7 +81,9 @@ class TestSupervise(unittest.TestCase):
         self.assertEqual(len(res.attempts), 3)
         self.assertEqual(calls, ["cheapo", "moderate", "moderate"])
 
-    def test_each_attempt_gets_its_own_workspace(self):
+    def test_attempts_share_the_task_workspace(self):
+        # A relaunch on a stronger agent should build on what the weaker one
+        # produced, so all attempts run in the same (shared) workspace.
         seen = []
 
         def runner(task, agent, budget, ws):
@@ -92,7 +94,8 @@ class TestSupervise(unittest.TestCase):
             supervise(
                 task=TASK, catalog=_catalog(), runner=runner, workspace=tmp, phd_agent_id="cheapo"
             )
-        self.assertEqual(len(seen), len(set(seen)))  # all distinct
+        self.assertTrue(len(seen) > 1)
+        self.assertEqual(set(seen), {tmp})  # all the same shared dir
 
 
 if __name__ == "__main__":

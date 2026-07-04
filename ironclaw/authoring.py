@@ -79,8 +79,9 @@ _DECOMPOSE_SCHEMA = {
                                 "id": {"type": "string"},
                                 "goal": {"type": "string"},
                                 "acceptance": _ACCEPTANCE,
+                                "depends_on": {"type": "array", "items": {"type": "string"}},
                             },
-                            "required": ["id", "goal", "acceptance"],
+                            "required": ["id", "goal", "acceptance", "depends_on"],
                             "additionalProperties": False,
                         },
                     },
@@ -112,7 +113,11 @@ def llm_decomposer(model: str = "claude-opus-4-8", *, api_key: str | None = None
             f"You are the PI of a research lab. Decompose this problem into "
             f"projects, each with concrete tasks. Every task must have "
             f"mechanically-checkable acceptance criteria (a file that must exist, "
-            f"or a shell command that must exit 0). Problem:\n\n{statement}"
+            f"or a shell command that must exit 0). Tasks in a project share one "
+            f"workspace directory. If a task needs a sibling task's output, list "
+            f"that sibling's id in depends_on (else use an empty list); the "
+            f"dependency's files will already be present when the task runs. "
+            f"Problem:\n\n{statement}"
         )
         resp = client.messages.create(
             model=model,
@@ -126,7 +131,13 @@ def llm_decomposer(model: str = "claude-opus-4-8", *, api_key: str | None = None
                 id=p["id"],
                 goal=p["goal"],
                 tasks=[
-                    Task(goal=t["goal"], acceptance=_to_acceptance(t["acceptance"]), id=t["id"], project_id=p["id"])
+                    Task(
+                        goal=t["goal"],
+                        acceptance=_to_acceptance(t["acceptance"]),
+                        id=t["id"],
+                        project_id=p["id"],
+                        depends_on=list(t.get("depends_on", [])),
+                    )
                     for t in p["tasks"]
                 ],
             )

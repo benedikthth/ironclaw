@@ -63,6 +63,11 @@ class Task:
     inputs: dict[str, Any] = field(default_factory=dict)
     id: str = field(default_factory=lambda: f"task_{uuid.uuid4().hex[:8]}")
     project_id: str | None = None
+    # Ids of sibling tasks (same project) whose artifacts this task needs. The PI
+    # runs a project's tasks in dependency order and blocks a task whose deps did
+    # not pass. Tasks in a project share one workspace, so a dependency's outputs
+    # are simply present when the dependent runs.
+    depends_on: list[str] = field(default_factory=list)
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> "Task":
@@ -72,6 +77,7 @@ class Task:
             inputs=d.get("inputs", {}),
             id=d.get("id", f"task_{uuid.uuid4().hex[:8]}"),
             project_id=d.get("project_id"),
+            depends_on=list(d.get("depends_on", [])),
         )
 
 

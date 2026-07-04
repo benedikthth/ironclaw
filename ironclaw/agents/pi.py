@@ -18,11 +18,12 @@ one call drives the whole institute.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable, Protocol
 
-from ..contracts import Task, TaskStatus
+from ..contracts import Task, TaskResult, TaskStatus
 from ..control import AgentCatalog
 from ..observability import Recorder, active_recorder, using
 from .senior import PhDRunner, SupervisionResult, supervise
@@ -127,13 +128,31 @@ def run_lab(
 
         for proj in problem.projects:
             rec.emit("project.start", role="pi", project_id=proj.id, message=proj.goal)
+            # One shared workspace per project: a task's artifacts are simply
+            # present when a later task in the same project runs.
+            proj_ws = os.path.join(workspace, proj.id)
+            os.makedirs(proj_ws, exist_ok=True)
             task_results: list[SupervisionResult] = []
+            passed_ids: set[str] = set()
             abandoned = False
 
-            for task in proj.tasks:
-                sup = _run_task(
-                    task, proj, catalog, runner, workspace, phd_agent_id, max_relaunches, base_budget, author=author
-                )
+            for task in _dependency_order(proj.tasks):
+                unmet = [d for d in task.depends_on if d not in passed_ids]
+                if unmet:
+                    # A dependency didn't pass — the inputs this task needs aren't
+                    # there. Block rather than run it into a confusing failure.
+                    rec.emit("task.blocked", role="pi", task_id=task.id, project_id=proj.id, data={"unmet": unmet})
+                    rec.emit("task.done", role="pi", task_id=task.id, project_id=proj.id,
+                             message="blocked", data={"status": "blocked"})
+                    task_results.append(
+                        SupervisionResult(
+                            task.id, TaskStatus.ESCALATED,
+                            TaskResult(task.id, TaskStatus.ESCALATED, summary=f"blocked: unmet dependencies {unmet}"),
+                        )
+                    )
+                    continue
+
+                sup = _run_task(task, proj, catalog, runner, proj_ws, phd_agent_id, max_relaunches, base_budget, author=author)
                 # PI gate: a task the Senior gave up on comes here for a decision.
                 retries = 0
                 while sup.status is TaskStatus.ESCALATED and retries < max_pi_retries:
@@ -144,12 +163,11 @@ def run_lab(
                     if decision is PIDecision.ABANDON:
                         abandoned = True
                         break
-                    retries += 1  # RETRY: another full run
-                    sup = _run_task(
-                        task, proj, catalog, runner, workspace, phd_agent_id,
-                        max_relaunches, base_budget, attempt_tag=f"retry{retries}", author=author,
-                    )
+                    retries += 1  # RETRY: another full run in the shared workspace
+                    sup = _run_task(task, proj, catalog, runner, proj_ws, phd_agent_id, max_relaunches, base_budget, author=author)
                 task_results.append(sup)
+                if sup.status is TaskStatus.PASSED:
+                    passed_ids.add(task.id)
                 if abandoned:
                     break
 
@@ -165,16 +183,37 @@ def run_lab(
         return LabResult(problem.statement, lab_status, projects)
 
 
+def _dependency_order(tasks: list[Task]) -> list[Task]:
+    """Stable topological order by ``depends_on`` (declared order within each
+    ready wave). Unknown deps are ignored; a dependency cycle falls back to
+    declared order for the tasks left in it."""
+    ids = {t.id for t in tasks}
+    ordered: list[Task] = []
+    seen: set[str] = set()
+    progressed = True
+    while progressed:
+        progressed = False
+        for t in tasks:
+            if t.id in seen:
+                continue
+            if all(d in seen for d in t.depends_on if d in ids):
+                ordered.append(t)
+                seen.add(t.id)
+                progressed = True
+    ordered.extend(t for t in tasks if t.id not in seen)  # cycle leftovers
+    return ordered
+
+
 def _run_task(
     task, proj, catalog, runner, workspace, phd_agent_id, max_relaunches, base_budget,
-    *, attempt_tag: str = "", author=None,
+    *, author=None,
 ) -> SupervisionResult:
-    ws = f"{workspace}/{proj.id}/{task.id}{('/' + attempt_tag) if attempt_tag else ''}"
+    # workspace is the shared project workspace; the Senior runs all attempts in it.
     return supervise(
         task=task,
         catalog=catalog,
         runner=runner,
-        workspace=ws,
+        workspace=workspace,
         phd_agent_id=phd_agent_id,
         max_relaunches=max_relaunches,
         base_budget=base_budget,

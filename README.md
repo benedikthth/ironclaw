@@ -106,6 +106,17 @@ scripted provider (`examples/run_phd_live.py`).
 > verification, not the model's submit call, is the source of truth: at budget
 > exhaustion the loop passes work that satisfies the acceptance contract.
 
+### Project workspace & task dependencies ✅
+
+Tasks in a project **share one workspace**, so a later task sees an earlier one's
+artifacts (a "compute" task writes `result.txt`; a "verify" task reads it). Tasks
+declare `depends_on`; the PI runs a project's tasks in **dependency order** and
+**blocks** a task whose dependency didn't pass — no more running a task into a
+confusing failure because its inputs never arrived. The decomposer emits
+`depends_on`, so the flow is authored end to end from a sentence. (This closed a
+gap the first live run surfaced: an independent-verification task couldn't see
+the task it was meant to verify.)
+
 ### Start from a sentence: authoring + TUI ✅
 
 **LLM-authoring seams** (`ironclaw/authoring.py`) turn plain language into

@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from .agents.pi import PIDecision
 from .observability import Event, Recorder, Sink
 
-_ICON = {"passed": "✓", "escalated": "!", "running": "·", "abandoned": "✗"}
+_ICON = {"passed": "✓", "escalated": "!", "running": "·", "abandoned": "✗", "blocked": "⊘"}
 
 
 @dataclass

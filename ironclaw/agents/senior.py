@@ -92,7 +92,10 @@ def supervise(
     rec = active_recorder()
     while True:
         agent = catalog.get(agent_id)
-        ws = os.path.join(workspace, f"attempt_{len(attempts)}")
+        # All attempts share the task's workspace (which is the shared *project*
+        # workspace): a relaunch on a stronger agent builds on what the weaker one
+        # produced instead of starting from zero.
+        ws = workspace
         rec.emit("attempt", role="senior", task_id=task.id, project_id=task.project_id,
                  agent_id=agent_id, data={"budget": budget, "n": len(attempts)})
         result = runner(task, agent, budget, ws)
