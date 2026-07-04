@@ -134,5 +134,59 @@ class TestRegistryRouting(unittest.TestCase):
         self.assertEqual(built["llama"].model, "llama3.1:8b")
 
 
+class _FakeStructured:
+    """A minimal provider exposing only .structured — proves the reviewer/authors
+    are provider-agnostic (any provider with structured output works)."""
+
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = []
+
+    def structured(self, system, prompt, schema, *, max_tokens=2048):
+        self.calls.append({"system": system, "schema": schema})
+        return self.responses.pop(0)
+
+
+class TestProviderAgnosticSeams(unittest.TestCase):
+    def test_reviewer_runs_on_any_provider(self):
+        from ironclaw.agents.postdoc import llm_reviewer
+        from ironclaw.contracts import TaskResult, TaskStatus
+        from ironclaw.control import FlagKind, ReviewVerdict
+
+        fake = _FakeStructured([{"verdict": "reject", "feedback": "needs work", "flag": "misspecified"}])
+        review = llm_reviewer(fake)
+        from ironclaw.contracts import Task
+
+        out = review(Task(goal="g", acceptance=[]), TaskResult("t", TaskStatus.PASSED), "/tmp")
+        self.assertIs(out.verdict, ReviewVerdict.REJECT)
+        self.assertIs(out.flag, FlagKind.MISSPECIFIED)
+        self.assertTrue(fake.calls)  # went through provider.structured
+
+    def test_decomposer_runs_on_any_provider(self):
+        from ironclaw.authoring import llm_decomposer
+
+        payload = {"projects": [{"id": "p1", "goal": "g", "tasks": [
+            {"id": "t1", "goal": "do", "acceptance": [
+                {"description": "exists", "kind": "file_exists", "spec": "out.txt"}], "depends_on": []}]}]}
+        decompose = llm_decomposer(_FakeStructured([payload]))
+        projects = decompose("some problem")
+        self.assertEqual(projects[0].id, "p1")
+        self.assertEqual(projects[0].tasks[0].acceptance[0].spec, "out.txt")
+
+    def test_task_author_runs_on_any_provider(self):
+        from ironclaw.authoring import llm_task_author
+        from ironclaw.contracts import Task
+
+        reformulated = {"goal": "clearer goal", "acceptance": []}
+        split = {"subtasks": [
+            {"id": "s1", "goal": "a", "acceptance": []},
+            {"id": "s2", "goal": "b", "acceptance": []},
+        ]}
+        author = llm_task_author(_FakeStructured([reformulated, split]))
+        t = Task(goal="vague", acceptance=[], id="x")
+        self.assertEqual(author.reformulate(t, None).goal, "clearer goal")
+        self.assertEqual([s.id for s in author.split(t, None)], ["s1", "s2"])
+
+
 if __name__ == "__main__":
     unittest.main()

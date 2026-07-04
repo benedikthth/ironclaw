@@ -135,15 +135,14 @@ def reviewed_phd_runner(
     return run
 
 
-def llm_reviewer(model: str = "claude-sonnet-5", *, api_key: str | None = None) -> Reviewer:
-    """A Claude-backed Postdoc. Reads the artifacts and returns a structured
-    verdict. Postdocs use a stronger model than PhDs by policy — quality review is
-    where you don't skimp."""
-    import json
+def llm_reviewer(provider=None, *, model: str = "claude-sonnet-5", api_key: str | None = None) -> Reviewer:
+    """An LLM Postdoc, provider-agnostic: pass any provider (built from the
+    registry) to review on OpenAI / OpenRouter / local, or omit it for the
+    Anthropic convenience path. Reads the artifacts and returns a structured
+    verdict. Postdocs use a stronger model than PhDs by policy."""
+    from ..providers.registry import structured_provider
 
-    import anthropic
-
-    client = anthropic.Anthropic(api_key=api_key)
+    prov = structured_provider(provider, model=model, api_key=api_key)
     schema = {
         "type": "object",
         "properties": {
@@ -172,13 +171,9 @@ def llm_reviewer(model: str = "claude-sonnet-5", *, api_key: str | None = None) 
             "'misspecified' if the task's criteria are themselves wrong, "
             "'suspected_intractable' if the goal appears infeasible, else 'none'."
         )
-        resp = client.messages.create(
-            model=model,
-            max_tokens=1024,
-            messages=[{"role": "user", "content": prompt}],
-            output_config={"format": {"type": "json_schema", "schema": schema}},
+        data = prov.structured(
+            system="You are a rigorous postdoc reviewer.", prompt=prompt, schema=schema, max_tokens=1024
         )
-        data = json.loads(next(b.text for b in resp.content if b.type == "text"))
         flag = None if data["flag"] == "none" else FlagKind(data["flag"])
         return PostdocReview(
             verdict=ReviewVerdict(data["verdict"]), feedback=data["feedback"], flag=flag

@@ -13,6 +13,7 @@ Requires the ``anthropic`` package and an API key (``ANTHROPIC_API_KEY`` or the
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from .base import AssistantTurn, LLMProvider, ToolCall, ToolSpec
@@ -68,6 +69,20 @@ class AnthropicProvider(LLMProvider):
             "model": self.model,
         }
         return AssistantTurn(text="".join(text_parts), tool_calls=calls, usage=usage)
+
+    def structured(self, system: str, prompt: str, schema: dict, *, max_tokens: int = 2048) -> dict:
+        """One-shot JSON call constrained to ``schema`` (Anthropic structured
+        outputs). Used by the reviewer/authoring seams so they run on any provider."""
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "max_tokens": max_tokens,
+            "messages": [{"role": "user", "content": prompt}],
+            "output_config": {"format": {"type": "json_schema", "schema": schema}},
+        }
+        if system:
+            kwargs["system"] = system
+        resp = self._get_client().messages.create(**kwargs)
+        return json.loads(next(b.text for b in resp.content if b.type == "text"))
 
 
 def _tool_to_anthropic(spec: ToolSpec) -> dict[str, Any]:

@@ -32,7 +32,7 @@ infinite spend.
 
 Implemented and tested end-to-end with **no API key or network** — a
 deterministic `FakeProvider` drives the harness, so the mechanics are
-CI-testable and token-free. 67 tests, stdlib-only (the `anthropic`/`openai`
+CI-testable and token-free. 70 tests, stdlib-only (the `anthropic`/`openai`
 adapters are optional extras). A lab starts from a **sentence**, the full org — PI → Senior →
 Postdoc → PhD — runs top to bottom emitting a live event stream, a **TUI** folds
 that stream into a live tree, and an Infrastructure Manager custodian sits off to
@@ -127,7 +127,11 @@ tier 3  opus         anthropic   claude-opus-4-8    -> (provider default)
 
 Clients are built lazily, so routing is testable with no SDKs installed; the
 OpenAI translation (tool results become `role:"tool"` messages) is verified via a
-fake client. Keys resolve from `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` /
+fake client. **Every role is provider-agnostic** — PhD execution *and* the
+one-shot reviewer/authoring calls (`llm_reviewer`, `llm_decomposer`,
+`llm_task_author`) run on any provider via a `provider.structured(...)` method
+(Anthropic `output_config` ↔ OpenAI `response_format`), so the Postdoc can be a
+70B on OpenRouter while PhDs are local Llamas. Keys resolve from `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` /
 `OPENROUTER_API_KEY`; `local` defaults to Ollama (`LOCAL_AI_BASE_URL` to
 repoint). `pip install "ironclaw[all]"` for both SDKs.
 
@@ -299,9 +303,7 @@ ANTHROPIC_API_KEY=... python examples/run_phd_live.py claude-haiku-4-5
   demos play scheduler by hand). Persist the scheduler queue for cross-restart
   recovery.
 - An **inference-budget resource dimension** (tokens/rate/$ per provider) — same
-  lease pattern as compute; and provider-agnostic reviewer/authoring calls (the
-  one-shot `llm_reviewer` / `llm_decomposer` use Anthropic structured outputs
-  today, though PhD execution already runs on any provider).
+  lease pattern as compute (every role already runs on any provider).
 - Run the authoring seams **live** on a real model end-to-end (the `llm_*`
   implementations exist; they need a key + a real task to exercise): PI
   decomposition, Senior reformulate/split, the Postdoc's `llm_reviewer`.

@@ -100,13 +100,13 @@ def _to_acceptance(items: list[dict]) -> list[AcceptanceCriterion]:
     return [AcceptanceCriterion(i["description"], CheckKind(i["kind"]), i["spec"]) for i in items]
 
 
-def llm_decomposer(model: str = "claude-opus-4-8", *, api_key: str | None = None) -> Decomposer:
-    """PI decomposition on a strong model — the plan sets up everything below it."""
-    import json
+def llm_decomposer(provider=None, *, model: str = "claude-opus-4-8", api_key: str | None = None) -> Decomposer:
+    """PI decomposition, provider-agnostic: pass any provider (built from the
+    registry) or omit it for the Anthropic convenience path. A strong model is
+    recommended — the plan sets up everything below it."""
+    from .providers.registry import structured_provider
 
-    import anthropic
-
-    client = anthropic.Anthropic(api_key=api_key)
+    prov = structured_provider(provider, model=model, api_key=api_key)
 
     def decompose(statement: str) -> list[ProjectSpec]:
         prompt = (
@@ -119,13 +119,9 @@ def llm_decomposer(model: str = "claude-opus-4-8", *, api_key: str | None = None
             f"dependency's files will already be present when the task runs. "
             f"Problem:\n\n{statement}"
         )
-        resp = client.messages.create(
-            model=model,
-            max_tokens=4096,
-            messages=[{"role": "user", "content": prompt}],
-            output_config={"format": {"type": "json_schema", "schema": _DECOMPOSE_SCHEMA}},
+        data = prov.structured(
+            system="You are the PI of a research lab.", prompt=prompt, schema=_DECOMPOSE_SCHEMA, max_tokens=4096
         )
-        data = json.loads(next(b.text for b in resp.content if b.type == "text"))
         return [
             ProjectSpec(
                 id=p["id"],
@@ -147,13 +143,12 @@ def llm_decomposer(model: str = "claude-opus-4-8", *, api_key: str | None = None
     return decompose
 
 
-def llm_task_author(model: str = "claude-opus-4-8", *, api_key: str | None = None) -> TaskAuthor:
-    """Senior authoring: rewrite a stuck task, or split it into subtasks."""
-    import json
+def llm_task_author(provider=None, *, model: str = "claude-opus-4-8", api_key: str | None = None) -> TaskAuthor:
+    """Senior authoring, provider-agnostic: rewrite a stuck task, or split it into
+    subtasks. Pass any provider (built from the registry) or omit for Anthropic."""
+    from .providers.registry import structured_provider
 
-    import anthropic
-
-    client = anthropic.Anthropic(api_key=api_key)
+    prov = structured_provider(provider, model=model, api_key=api_key)
 
     class _Author:
         def reformulate(self, task: Task, diagnosis) -> Task:
@@ -169,7 +164,7 @@ def llm_task_author(model: str = "claude-opus-4-8", *, api_key: str | None = Non
                 "Rewrite it to be clearer and more achievable, keeping the same "
                 "intent. Return a new goal and mechanically-checkable acceptance criteria."
             )
-            data = self._call(prompt, schema)
+            data = prov.structured(system="You are a senior researcher.", prompt=prompt, schema=schema, max_tokens=2048)
             return Task(goal=data["goal"], acceptance=_to_acceptance(data["acceptance"]),
                         inputs=task.inputs, project_id=task.project_id)
 
@@ -195,19 +190,10 @@ def llm_task_author(model: str = "claude-opus-4-8", *, api_key: str | None = Non
                 f"Trouble: {getattr(diagnosis, 'notes', '')}\n\n"
                 "Split it into 2-4 smaller, independently-checkable subtasks."
             )
-            data = self._call(prompt, schema)
+            data = prov.structured(system="You are a senior researcher.", prompt=prompt, schema=schema, max_tokens=2048)
             return [
                 Task(goal=s["goal"], acceptance=_to_acceptance(s["acceptance"]), id=s["id"], project_id=task.project_id)
                 for s in data["subtasks"]
             ]
-
-        def _call(self, prompt: str, schema: dict) -> dict:
-            resp = client.messages.create(
-                model=model,
-                max_tokens=2048,
-                messages=[{"role": "user", "content": prompt}],
-                output_config={"format": {"type": "json_schema", "schema": schema}},
-            )
-            return json.loads(next(b.text for b in resp.content if b.type == "text"))
 
     return _Author()

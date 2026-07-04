@@ -77,6 +77,25 @@ class OpenAICompatibleProvider(LLMProvider):
             }
         return AssistantTurn(text=msg.content or "", tool_calls=calls, usage=usage)
 
+    def structured(self, system: str, prompt: str, schema: dict, *, max_tokens: int = 2048) -> dict:
+        """One-shot JSON call constrained to ``schema`` via Chat Completions
+        ``response_format`` (json_schema, strict). OpenAI enforces it; OpenRouter
+        and capable local servers honor it too."""
+        messages: list[dict[str, Any]] = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+        resp = self._get_client().chat.completions.create(
+            model=self.model,
+            max_tokens=max_tokens,
+            messages=messages,
+            response_format={
+                "type": "json_schema",
+                "json_schema": {"name": "output", "schema": schema, "strict": True},
+            },
+        )
+        return json.loads(resp.choices[0].message.content)
+
 
 def _tool_to_openai(spec: ToolSpec) -> dict[str, Any]:
     return {

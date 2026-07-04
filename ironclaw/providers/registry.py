@@ -64,6 +64,15 @@ class ProviderRegistry:
         raise ValueError(f"unknown provider kind {cfg.kind!r} for {provider_name!r}")
 
 
+def structured_provider(provider=None, *, model: str = "claude-opus-4-8", api_key: str | None = None):
+    """Resolve a provider for a one-shot structured call (reviewer/authoring).
+    Pass a built provider to run on any endpoint; omit it for the Anthropic
+    convenience path (back-compat with the ``model``/``api_key`` signature)."""
+    if provider is not None:
+        return provider
+    return AnthropicProvider(model, api_key=api_key)
+
+
 def default_registry() -> ProviderRegistry:
     """Sensible presets for the four common providers, keyed off standard env
     vars. ``local`` defaults to Ollama's OpenAI-compatible endpoint; override

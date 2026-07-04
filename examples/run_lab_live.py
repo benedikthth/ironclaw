@@ -21,6 +21,7 @@ from ironclaw.agents.postdoc import reviewed_phd_runner, llm_reviewer  # noqa: E
 from ironclaw.authoring import author_problem, llm_decomposer, llm_task_author  # noqa: E402
 from ironclaw.control import AgentCatalog, AgentSpec, Role  # noqa: E402
 from ironclaw.observability import Recorder, console_sink, total_usage, using  # noqa: E402
+from ironclaw.providers.registry import ProviderConfig, default_registry  # noqa: E402
 from ironclaw.tui import LiveDashboard, render  # noqa: E402
 
 
@@ -40,11 +41,18 @@ def main() -> None:
         {Role.PHD: ["cheapo", "moderate"]},
     )
 
+    # One registry wires every role; swap any AgentSpec.provider / .build(...) call
+    # below to "openai" / "openrouter" / "local" to run that role elsewhere.
+    registry = default_registry()
+    if key:
+        registry.register(ProviderConfig("anthropic", "anthropic", api_key=key))
+
+    # Reviewer / authors are now provider-agnostic — built from the registry.
+    reviewer = llm_reviewer(registry.build("anthropic", "claude-sonnet-5"))
+    author = llm_task_author(registry.build("anthropic", "claude-opus-4-8"))
+    decomposer = llm_decomposer(registry.build("anthropic", "claude-opus-4-8"))
     # Postdoc-gated real-PhD runner: each PhD run is reviewed before it counts.
-    reviewer = llm_reviewer(model="claude-sonnet-5", api_key=key)
-    runner = reviewed_phd_runner(reviewer, skills_root=skills_root, api_key=key, max_rounds=1)
-    author = llm_task_author(model="claude-opus-4-8", api_key=key)
-    decomposer = llm_decomposer(model="claude-opus-4-8", api_key=key)
+    runner = reviewed_phd_runner(reviewer, skills_root=skills_root, registry=registry, max_rounds=1)
 
     dash = LiveDashboard()
     rec = Recorder(sinks=[dash.as_sink(), console_sink()])
