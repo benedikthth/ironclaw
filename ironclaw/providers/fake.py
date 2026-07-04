@@ -20,7 +20,6 @@ class FakeProvider(LLMProvider):
     def __init__(self, script: list[Step], name: str = "fake") -> None:
         self.name = name
         self._script = list(script)
-        self._i = 0
 
     def complete(
         self,
@@ -28,10 +27,14 @@ class FakeProvider(LLMProvider):
         messages: list[dict[str, Any]],
         tools: list[ToolSpec],
     ) -> AssistantTurn:
-        if self._i >= len(self._script):
+        # Stateless indexing: the next step is chosen by how many assistant turns
+        # already exist in the log. This mirrors a real (stateless) provider and
+        # makes suspend/resume work — a rebuilt FakeProvider picks up exactly
+        # where the persisted message log left off.
+        idx = sum(1 for m in messages if m.get("role") == "assistant")
+        if idx >= len(self._script):
             # Exhausting the script means the harness looped more than expected;
             # surface it loudly rather than hanging.
             raise AssertionError("FakeProvider script exhausted")
-        step = self._script[self._i]
-        self._i += 1
+        step = self._script[idx]
         return step(messages) if callable(step) else step

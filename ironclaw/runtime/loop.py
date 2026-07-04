@@ -1,10 +1,11 @@
-"""The generic agent loop: model <-> tools until submission, verify, iterate.
+"""The generic agent loop: model <-> tools until submission, verify, iterate —
+now with durable suspend/resume across background jobs.
 
 This is the reliability core. A cheap model gets: a bounded loop, structured
 tools, a forced verification gate on submission, and a hard iteration budget that
-converts "tirespinning" into a definite ESCALATED/FAILED outcome instead of an
-infinite spend. Every superior role in the institute ultimately relies on this
-loop terminating honestly.
+converts "tirespinning" into a definite ESCALATED outcome instead of an infinite
+spend. For long-running work it can *suspend* on a background job (state written
+to disk) and be *resumed* when the job finishes — surviving process restarts.
 """
 
 from __future__ import annotations
@@ -13,7 +14,6 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ..contracts import (
-    Artifact,
     Task,
     TaskResult,
     TaskStatus,
@@ -27,6 +27,7 @@ from ..providers.base import (
 )
 from ..tools.base import Tool, ToolContext, ToolError, spec_of
 from ..verify import all_passed, verify
+from .state import PersistedTask, save_state
 
 
 @dataclass
@@ -38,9 +39,13 @@ class LoopConfig:
 class LoopOutcome:
     result: TaskResult
     messages: list[dict[str, Any]] = field(default_factory=list)
+    # Set when the PhD suspended on a background job. The caller (or a scheduler)
+    # resumes via resume_loop(state_path, ...) once the job completes.
+    state_path: str | None = None
+    waiting_on: str | None = None  # job_id
 
 
-def run_agent_loop(
+def run_loop(
     *,
     provider: LLMProvider,
     system: str,
@@ -48,14 +53,67 @@ def run_agent_loop(
     tools: list[Tool],
     ctx: ToolContext,
     config: LoopConfig | None = None,
+    state_path: str | None = None,
 ) -> LoopOutcome:
+    """Start a task fresh."""
     config = config or LoopConfig()
+    messages: list[dict[str, Any]] = [user_text(_task_prompt(task))]
+    return _drive(
+        provider=provider,
+        system=system,
+        task=task,
+        tools=tools,
+        ctx=ctx,
+        messages=messages,
+        iterations=0,
+        max_iterations=config.max_iterations,
+        state_path=state_path,
+    )
+
+
+def resume_loop(
+    *,
+    provider: LLMProvider,
+    task: Task,
+    tools: list[Tool],
+    ctx: ToolContext,
+    state: PersistedTask,
+    job_output: str,
+    state_path: str,
+) -> LoopOutcome:
+    """Resume a suspended task: fill in the awaited job's tool result, continue."""
+    messages = list(state.messages)
+    awaiting = state.awaiting or {}
+    messages.append(tool_result(awaiting["call_id"], job_output))
+    return _drive(
+        provider=provider,
+        system=state.system,
+        task=task,
+        tools=tools,
+        ctx=ctx,
+        messages=messages,
+        iterations=state.iterations,
+        max_iterations=state.max_iterations,
+        state_path=state_path,
+    )
+
+
+def _drive(
+    *,
+    provider: LLMProvider,
+    system: str,
+    task: Task,
+    tools: list[Tool],
+    ctx: ToolContext,
+    messages: list[dict[str, Any]],
+    iterations: int,
+    max_iterations: int,
+    state_path: str | None,
+) -> LoopOutcome:
     by_name = {t.name: t for t in tools}
     specs = [spec_of(t) for t in tools]
-    messages: list[dict[str, Any]] = [user_text(_task_prompt(task))]
 
-    iterations = 0
-    while iterations < config.max_iterations:
+    while iterations < max_iterations:
         iterations += 1
         turn: AssistantTurn = provider.complete(system, messages, specs)
         messages.append(assistant_message(turn))
@@ -70,59 +128,139 @@ def run_agent_loop(
             continue
 
         for call in turn.tool_calls:
+            # await_job is intercepted here: finished -> feed result inline;
+            # pending -> suspend the whole PhD to disk and hand back control.
+            if call.name == "await_job":
+                suspended = _handle_await(
+                    call=call,
+                    ctx=ctx,
+                    messages=messages,
+                    task=task,
+                    system=system,
+                    iterations=iterations,
+                    max_iterations=max_iterations,
+                    state_path=state_path,
+                )
+                if suspended is not None:
+                    return suspended
+                continue
+
             tool = by_name.get(call.name)
             if tool is None:
                 messages.append(tool_result(call.id, f"unknown tool {call.name!r}", is_error=True))
                 continue
             try:
-                output = tool.run(call.arguments, ctx)
-                messages.append(tool_result(call.id, output))
+                messages.append(tool_result(call.id, tool.run(call.arguments, ctx)))
             except ToolError as e:
                 messages.append(tool_result(call.id, f"error: {e}", is_error=True))
 
         if "submission" in ctx.scratch:
-            checks = verify(task, ctx.workspace)
-            if all_passed(checks):
-                sub = ctx.scratch.pop("submission")
-                return LoopOutcome(
-                    TaskResult(
-                        task_id=task.id,
-                        status=TaskStatus.PASSED,
-                        artifacts=sub["artifacts"],
-                        checks=checks,
-                        summary=sub["summary"],
-                        iterations=iterations,
-                    ),
-                    messages,
-                )
-            # Failed verification: report the failing checks and let the PhD fix.
-            ctx.scratch.pop("submission")
-            failing = "\n".join(
-                f"- FAIL [{c.criterion.description}]: {c.detail}" for c in checks if not c.passed
-            )
-            messages.append(
-                user_text(
-                    "Verification failed. These acceptance criteria are not yet "
-                    f"met:\n{failing}\nAddress them and submit again."
-                )
-            )
+            outcome = _finalize_submission(task, ctx, messages, iterations)
+            if outcome is not None:
+                return outcome
 
     # Budget exhausted: escalate rather than silently fail.
-    checks = verify(task, ctx.workspace)
     return LoopOutcome(
         TaskResult(
             task_id=task.id,
             status=TaskStatus.ESCALATED,
-            artifacts=[],
-            checks=checks,
+            checks=verify(task, ctx.workspace),
             summary=(
-                f"Iteration budget ({config.max_iterations}) exhausted without "
-                "passing verification. Escalating to the Senior Researcher."
+                f"Iteration budget ({max_iterations}) exhausted without passing "
+                "verification. Escalating to the Senior Researcher."
             ),
             iterations=iterations,
         ),
         messages,
     )
+
+
+def _handle_await(
+    *,
+    call: Any,
+    ctx: ToolContext,
+    messages: list[dict[str, Any]],
+    task: Task,
+    system: str,
+    iterations: int,
+    max_iterations: int,
+    state_path: str | None,
+) -> LoopOutcome | None:
+    """Return a WAITING LoopOutcome if the job is pending, else None (result fed
+    inline and the loop continues)."""
+    from ..jobs import JobStatus  # local import to avoid a cycle
+
+    if ctx.jobs is None:
+        messages.append(tool_result(call.id, "error: no job backend", is_error=True))
+        return None
+    job_id = call.arguments["job_id"]
+    status, output = ctx.jobs.poll(job_id)
+    if status is not JobStatus.RUNNING:
+        messages.append(tool_result(call.id, output))
+        return None
+
+    # Pending: persist and suspend. Note we deliberately do NOT append a
+    # tool_result for this call — resume_loop fills it in with the job output.
+    if state_path is None:
+        state_path = f"{ctx.workspace}/.ironclaw_state.json"
+    save_state(
+        state_path,
+        PersistedTask(
+            task=task,
+            system=system,
+            messages=messages,
+            iterations=iterations,
+            workspace=ctx.workspace,
+            max_iterations=max_iterations,
+            skills_root=getattr(ctx.skills, "root", None),
+            awaiting={"job_id": job_id, "call_id": call.id},
+        ),
+    )
+    return LoopOutcome(
+        TaskResult(
+            task_id=task.id,
+            status=TaskStatus.WAITING,
+            summary=f"Suspended waiting on job {job_id}.",
+            iterations=iterations,
+        ),
+        messages,
+        state_path=state_path,
+        waiting_on=job_id,
+    )
+
+
+def _finalize_submission(
+    task: Task,
+    ctx: ToolContext,
+    messages: list[dict[str, Any]],
+    iterations: int,
+) -> LoopOutcome | None:
+    checks = verify(task, ctx.workspace)
+    if all_passed(checks):
+        sub = ctx.scratch.pop("submission")
+        return LoopOutcome(
+            TaskResult(
+                task_id=task.id,
+                status=TaskStatus.PASSED,
+                artifacts=sub["artifacts"],
+                checks=checks,
+                summary=sub["summary"],
+                iterations=iterations,
+            ),
+            messages,
+        )
+    # Failed verification: report the failing checks and let the PhD fix.
+    ctx.scratch.pop("submission")
+    failing = "\n".join(
+        f"- FAIL [{c.criterion.description}]: {c.detail}" for c in checks if not c.passed
+    )
+    messages.append(
+        user_text(
+            "Verification failed. These acceptance criteria are not yet met:\n"
+            f"{failing}\nAddress them and submit again."
+        )
+    )
+    return None
 
 
 def _task_prompt(task: Task) -> str:

@@ -20,6 +20,7 @@ class ToolContext:
 
     workspace: str
     skills: Any = None  # SkillRegistry; late-bound to avoid an import cycle
+    jobs: Any = None  # JobBackend; late-bound
     scratch: dict[str, Any] = field(default_factory=dict)
 
 
