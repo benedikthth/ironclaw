@@ -37,7 +37,9 @@ class JobRecord:
 
 
 class JobBackend(Protocol):
-    def submit(self, kind: str, command: str) -> str: ...
+    # ``request`` (a scheduler.ResourceRequest) is accepted for a uniform call
+    # site; raw backends ignore it, the Scheduler uses it for admission.
+    def submit(self, kind: str, command: str, request: object | None = None) -> str: ...
     def poll(self, job_id: str) -> tuple[JobStatus, str]: ...
 
 
@@ -96,7 +98,7 @@ class LocalProcessBackend(JobBackend):
             if not os.path.exists(os.path.join(self.jobs_dir, f"{jid}.code")):
                 return jid
 
-    def submit(self, kind: str, command: str) -> str:
+    def submit(self, kind: str, command: str, request: object | None = None) -> str:
         jid = self._new_id()
         out = os.path.join(self.jobs_dir, f"{jid}.out")
         code = os.path.join(self.jobs_dir, f"{jid}.code")
@@ -149,7 +151,7 @@ class FakeJobBackend(JobBackend):
         self._jobs: dict[str, tuple[JobStatus, str]] = {}
         self._n = 0
 
-    def submit(self, kind: str, command: str) -> str:
+    def submit(self, kind: str, command: str, request: object | None = None) -> str:
         self._n += 1
         jid = f"fake_{self._n}"
         self._jobs[jid] = (JobStatus.RUNNING, "")

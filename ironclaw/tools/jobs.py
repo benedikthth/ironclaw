@@ -26,6 +26,19 @@ class StartJob(Tool):
         "properties": {
             "kind": {"type": "string", "description": "e.g. 'train', 'slurm', 'crawl'."},
             "command": {"type": "string", "description": "Shell command to run."},
+            "resources": {
+                "type": "object",
+                "description": "Resources this job needs, e.g. {\"gpu\": 1, \"cpu\": 4}. "
+                "Declare GPU needs so the scheduler won't run two GPU jobs at once.",
+                "additionalProperties": {"type": "number"},
+            },
+            "priority": {"type": "integer", "default": 0},
+            "domain": {
+                "type": "string",
+                "default": "local",
+                "description": "'local' runs here under the resource pool; "
+                "'slurm:<partition>' delegates admission to the cluster.",
+            },
         },
         "required": ["kind", "command"],
     }
@@ -33,7 +46,16 @@ class StartJob(Tool):
     def run(self, args: dict[str, Any], ctx: ToolContext) -> str:
         if ctx.jobs is None:
             raise ToolError("no job backend available")
-        job_id = ctx.jobs.submit(args["kind"], args["command"])
+        # Build a ResourceRequest lazily so raw backends (which ignore it) don't
+        # need the scheduler imported.
+        from ..scheduler import ResourceRequest
+
+        request = ResourceRequest(
+            resources={k: float(v) for k, v in (args.get("resources") or {}).items()},
+            priority=int(args.get("priority", 0)),
+            domain=args.get("domain", "local"),
+        )
+        job_id = ctx.jobs.submit(args["kind"], args["command"], request)
         return f"submitted {args['kind']} job: {job_id}"
 
 

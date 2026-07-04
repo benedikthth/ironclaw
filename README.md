@@ -66,6 +66,27 @@ disk — and is **resumed** when the job finishes, surviving process restarts.
   rebuilt on resume.
 - The demo suspends/resumes several times across a real 1s job, then passes.
 
+### Resource-aware scheduler (Slice 3) ✅
+
+Two agents shouldn't both grab 100% of one GPU — but a CPU task shouldn't wait
+behind a GPU task either. Because a PhD suspends to disk while a job runs, the
+scheduler doesn't gate reasoning loops (cheap, I/O-bound); it gates the heavy
+*jobs* against a declared resource pool (`ironclaw/scheduler.py`):
+
+- **Backfill admission** — scans the pending queue in priority order and admits
+  every job that fits, *skipping* (not stopping at) ones that don't. That's the
+  fix for head-of-line blocking: a CPU job runs immediately while a GPU job sits
+  queued for a lease.
+- **Leases** against a `ResourcePool` `{gpu, cpu, mem_gb, ...}`; released on
+  completion so the next queued job admits.
+- **Resource domains** — `local` jobs are gated by our pool; `slurm:<partition>`
+  jobs are handed to the cluster's own scheduler (we don't reimplement Slurm).
+- Drop-in for the PhD's `await_job`: "queued" and "running" both read as
+  not-done, so the PhD just stays suspended. `tick()` drives admission + reaps
+  completions and returns which jobs finished (so a daemon knows whom to resume).
+- v2: preemption and fair-share weighting (backfill can starve a large job;
+  Slurm-style reservations are the intended fix).
+
 ### Control model ✅
 
 The institute's supervision rules as typed contracts + a deterministic baseline
@@ -84,18 +105,24 @@ policy (`ironclaw/control.py`):
 ### Run it
 
 ```bash
-python -m ironclaw.demo         # PhD slice: skill reuse → transform → verify
-python -m ironclaw.demo_async   # durable suspend/resume across a real job
+python -m ironclaw.demo            # PhD slice: skill reuse → transform → verify
+python -m ironclaw.demo_async      # durable suspend/resume across a real job
+python -m ironclaw.demo_scheduler  # backfill: CPU job not blocked behind GPU jobs
 python -m unittest discover -s tests
 ```
 
 ## Roadmap
 
-- Real provider adapters (Anthropic first) behind the neutral interface.
+- The **daemon**: an always-on service that owns the durable task store + the
+  scheduler, ticks admission, and drives resume when jobs finish (today the
+  demos play scheduler by hand). Persist the scheduler queue for cross-restart
+  recovery.
+- Real provider adapters (Anthropic first) behind the neutral interface, and an
+  inference-budget resource dimension (tokens/rate/$ per provider) — same lease
+  pattern as compute.
 - Wire the control model into a running **Senior** loop (consume `Escalation`,
   act on the `Disposition`) and a **Postdoc** review gate.
 - **PI** decomposition (problem → projects) and the lab lifecycle.
 - The **Infrastructure Manager** agent + resource registry (GPU/storage/slurm
   leases) on top of the skills custodian surface.
-- A backgrounded daemon that owns the durable task store and drives resume;
-  then UIs: web, TUI, Telegram over one API.
+- UIs: web, TUI, Telegram over one API.
