@@ -32,7 +32,7 @@ infinite spend.
 
 Implemented and tested end-to-end with **no API key or network** — a
 deterministic `FakeProvider` drives the harness, so the mechanics are
-CI-testable and token-free. 70 tests, stdlib-only (the `anthropic`/`openai`
+CI-testable and token-free. 81 tests, stdlib-only (the `anthropic`/`openai`
 adapters are optional extras). A lab starts from a **sentence**, the full org — PI → Senior →
 Postdoc → PhD — runs top to bottom emitting a live event stream, a **TUI** folds
 that stream into a live tree, and an Infrastructure Manager custodian sits off to
@@ -106,6 +106,28 @@ scripted provider (`examples/run_phd_live.py`).
 > `submit_result`, and the loop escalated a *finished* task. Fixed — mechanical
 > verification, not the model's submit call, is the source of truth: at budget
 > exhaustion the loop passes work that satisfies the acceptance contract.
+
+### A learning institute: cross-lab memory + self-improving skills ✅
+
+Labs share as much as possible. Skills were already institute-global (via the
+Infrastructure Manager); these add the *knowledge* and *learning* halves, so the
+institute compounds instead of starting each lab from zero:
+
+- **Cross-lab memory** (`memory.py`) — a durable, searchable `MemoryStore` records
+  every lab and its findings (statement, summary, artifacts, status). The PI
+  decomposer retrieves prior related work and opens its plan with it
+  ("Prior related work in this institute (reuse where you can)…"). Stdlib JSON +
+  keyword retrieval; swap for SQLite-FTS/embeddings later without touching callers.
+- **Self-improving skills** (`learning.py`) — the missing half of the custodian.
+  The IM already harvested left-behind skills and repaired broken ones; now, when
+  a PhD *succeeds* at something non-trivial (threshold-triggered like Hermes: the
+  task passed **and** took ≥ N tool calls), a `SkillLearner` distills the approach
+  into a reusable skill and registers it (provider-agnostic, reads the artifacts,
+  dedup keeps the folder clean). So the second PhD to face a problem starts from
+  the first one's win.
+
+`demo_memory` shows it: lab 1 learns `aggregate_by_key` and records its finding;
+lab 2 would open pre-informed by both.
 
 ### Multi-provider: any models, any providers ✅
 
@@ -290,6 +312,7 @@ python -m ironclaw.demo_lab        # full institute: PI -> Senior -> Postdoc -> 
 python -m ironclaw.demo_infra      # custodian: survey, onboard slurm, harvest, repair
 python -m ironclaw.demo_tui        # sentence -> decomposed lab -> rendered tree
 python -m ironclaw.demo_providers  # one PhD ladder spanning 4 providers
+python -m ironclaw.demo_memory     # cross-lab memory + a skill learned from success
 python -m unittest discover -s tests
 
 # live: a real cheap model drives the PhD slice (needs an API key)
@@ -298,6 +321,10 @@ ANTHROPIC_API_KEY=... python examples/run_phd_live.py claude-haiku-4-5
 
 ## Roadmap
 
+- **Real execution backends** as `JobBackend`s — `SlurmBackend` (`sbatch`/`squeue`),
+  SSH, Docker, Modal. Today "slurm" is only a scheduler *domain label* + a faked
+  onboarding probe; every job actually runs as a local subprocess. The seam
+  (suspend/resume, scheduler admission) already handles a real backend.
 - The **daemon**: an always-on service that owns the durable task store + the
   scheduler, ticks admission, and drives resume when jobs finish (today the
   demos play scheduler by hand). Persist the scheduler queue for cross-restart

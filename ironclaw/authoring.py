@@ -100,15 +100,18 @@ def _to_acceptance(items: list[dict]) -> list[AcceptanceCriterion]:
     return [AcceptanceCriterion(i["description"], CheckKind(i["kind"]), i["spec"]) for i in items]
 
 
-def llm_decomposer(provider=None, *, model: str = "claude-opus-4-8", api_key: str | None = None) -> Decomposer:
+def llm_decomposer(provider=None, *, memory=None, model: str = "claude-opus-4-8", api_key: str | None = None) -> Decomposer:
     """PI decomposition, provider-agnostic: pass any provider (built from the
     registry) or omit it for the Anthropic convenience path. A strong model is
-    recommended — the plan sets up everything below it."""
+    recommended — the plan sets up everything below it. Pass a ``MemoryStore`` to
+    inform the plan with prior related labs/findings (cross-lab sharing)."""
     from .providers.registry import structured_provider
 
     prov = structured_provider(provider, model=model, api_key=api_key)
 
     def decompose(statement: str) -> list[ProjectSpec]:
+        prior = memory.context_for(statement) if memory is not None else ""
+        prior_block = (prior + "\n\n") if prior else ""
         prompt = (
             f"You are the PI of a research lab. Decompose this problem into "
             f"projects, each with concrete tasks. Every task must have "
@@ -116,8 +119,8 @@ def llm_decomposer(provider=None, *, model: str = "claude-opus-4-8", api_key: st
             f"or a shell command that must exit 0). Tasks in a project share one "
             f"workspace directory. If a task needs a sibling task's output, list "
             f"that sibling's id in depends_on (else use an empty list); the "
-            f"dependency's files will already be present when the task runs. "
-            f"Problem:\n\n{statement}"
+            f"dependency's files will already be present when the task runs.\n\n"
+            f"{prior_block}Problem:\n\n{statement}"
         )
         data = prov.structured(
             system="You are the PI of a research lab.", prompt=prompt, schema=_DECOMPOSE_SCHEMA, max_tokens=4096

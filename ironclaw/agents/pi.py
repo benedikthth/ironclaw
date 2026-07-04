@@ -118,6 +118,8 @@ def run_lab(
     recorder: Recorder | None = None,
     max_pi_retries: int = 3,
     author=None,
+    memory=None,
+    learner=None,
 ) -> LabResult:
     overseer = overseer or AutoOverseer()
     with using(recorder):
@@ -168,6 +170,18 @@ def run_lab(
                 task_results.append(sup)
                 if sup.status is TaskStatus.PASSED:
                     passed_ids.add(task.id)
+                    # Share the finding across labs, and learn a skill from it.
+                    if memory is not None:
+                        memory.add(
+                            "finding", f"{task.goal}\n{sup.result.summary}",
+                            ref={"task_id": task.id, "summary": sup.result.summary,
+                                 "artifacts": [{"path": a.path, "kind": a.kind} for a in sup.result.artifacts]},
+                        )
+                    if learner is not None:
+                        tool_calls = sum(
+                            1 for e in rec.events if e.kind == "tool.call" and e.task_id == task.id
+                        )
+                        learner.consider(task, sup, proj_ws, tool_calls)
                 if abandoned:
                     break
 
@@ -180,6 +194,12 @@ def run_lab(
         lab_ok = all(p.status is TaskStatus.PASSED for p in projects)
         lab_status = TaskStatus.PASSED if lab_ok else TaskStatus.ESCALATED
         rec.emit("lab.result", role="pi", lab=problem.statement, message=lab_status.value)
+        if memory is not None:
+            memory.add(
+                "lab", problem.statement, tags=[lab_status.value],
+                ref={"statement": problem.statement, "status": lab_status.value,
+                     "projects": [{"id": p.project_id, "status": p.status.value} for p in projects]},
+            )
         return LabResult(problem.statement, lab_status, projects)
 
 
