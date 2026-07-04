@@ -102,23 +102,29 @@ def reviewed_phd_runner(
     *,
     skills_root: str | None = None,
     api_key: str | None = None,
+    registry=None,
     max_rounds: int = 2,
 ):
-    """A Senior-compatible runner (task, agent, budget, workspace) that gates each
-    real PhD run through the Postdoc."""
+    """A Senior-compatible runner that gates each real PhD run through the
+    Postdoc. Each PhD runs on its assigned agent's provider/model via the
+    registry, so a lab can mix providers. Passing ``api_key`` (no registry) keeps
+    the Anthropic-only convenience path."""
+    from ..providers.registry import ProviderConfig, default_registry
+
+    reg = registry
+    if reg is None:
+        reg = default_registry()
+        if api_key:
+            reg.register(ProviderConfig("anthropic", "anthropic", api_key=api_key))
 
     def run(task: Task, agent, budget_iterations: int, workspace: str) -> TaskResult:
-        from ..providers.anthropic import AnthropicProvider
         from ..runtime.loop import LoopConfig
         from .phd import run_phd
 
         def phd_run(t: Task, ws: str) -> TaskResult:
-            provider = AnthropicProvider(model=agent.model, api_key=api_key)
+            provider = reg.build(agent.provider, agent.model)
             return run_phd(
-                task=t,
-                provider=provider,
-                workspace=ws,
-                skills_root=skills_root,
+                task=t, provider=provider, workspace=ws, skills_root=skills_root,
                 config=LoopConfig(max_iterations=budget_iterations),
             ).result
 

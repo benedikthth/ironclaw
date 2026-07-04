@@ -24,18 +24,23 @@ class AnthropicProvider(LLMProvider):
         model: str = "claude-opus-4-8",
         *,
         api_key: str | None = None,
+        base_url: str | None = None,
         max_tokens: int = 4096,
         client: Any = None,
     ) -> None:
         self.name = f"anthropic:{model}"
         self.model = model
+        self.base_url = base_url
         self.max_tokens = max_tokens
-        if client is not None:
-            self._client = client
-        else:
-            import anthropic  # imported lazily so the core stays dependency-free
+        self._api_key = api_key
+        self._client = client  # injected in tests; lazily built otherwise
 
-            self._client = anthropic.Anthropic(api_key=api_key)
+    def _get_client(self) -> Any:
+        if self._client is None:
+            import anthropic  # lazy: no dependency until a real call
+
+            self._client = anthropic.Anthropic(api_key=self._api_key, base_url=self.base_url)
+        return self._client
 
     def complete(
         self,
@@ -43,7 +48,7 @@ class AnthropicProvider(LLMProvider):
         messages: list[dict[str, Any]],
         tools: list[ToolSpec],
     ) -> AssistantTurn:
-        resp = self._client.messages.create(
+        resp = self._get_client().messages.create(
             model=self.model,
             max_tokens=self.max_tokens,
             system=system,

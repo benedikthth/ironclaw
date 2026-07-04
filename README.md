@@ -32,8 +32,8 @@ infinite spend.
 
 Implemented and tested end-to-end with **no API key or network** — a
 deterministic `FakeProvider` drives the harness, so the mechanics are
-CI-testable and token-free. 58 tests, stdlib-only (the `anthropic` adapter is an
-optional extra). A lab starts from a **sentence**, the full org — PI → Senior →
+CI-testable and token-free. 67 tests, stdlib-only (the `anthropic`/`openai`
+adapters are optional extras). A lab starts from a **sentence**, the full org — PI → Senior →
 Postdoc → PhD — runs top to bottom emitting a live event stream, a **TUI** folds
 that stream into a live tree, and an Infrastructure Manager custodian sits off to
 the side.
@@ -42,8 +42,9 @@ the side.
 
 The PhD is ~90% of the real work, so it landed first.
 
-- Provider-neutral LLM interface (`ironclaw/providers/`) — Anthropic / OpenAI /
-  OpenRouter / self-hosted adapters slot in behind one shape.
+- Provider-neutral LLM interface (`ironclaw/providers/`) — Anthropic + an
+  OpenAI-compatible adapter (OpenAI / OpenRouter / local) behind one shape, mixed
+  freely per agent via the `ProviderRegistry`.
 - The PhD agent loop (`ironclaw/runtime/loop.py`): model ⇄ tools → submit →
   **verify against acceptance criteria** → retry or escalate.
 - Tools (`ironclaw/tools/`): `write_file`, `read_file`, `python_exec`,
@@ -105,6 +106,30 @@ scripted provider (`examples/run_phd_live.py`).
 > `submit_result`, and the loop escalated a *finished* task. Fixed — mechanical
 > verification, not the model's submit call, is the source of truth: at budget
 > exhaustion the loop passes work that satisfies the acceptance contract.
+
+### Multi-provider: any models, any providers ✅
+
+Two wire protocols cover the field: `providers/anthropic.py` and
+`providers/openai.py` — the OpenAI-compatible one also serves **OpenRouter** and
+any **local/self-hosted** server (Ollama, vLLM, LM Studio, llama.cpp) via
+`base_url`. A **`ProviderRegistry`** (`providers/registry.py`) maps a provider
+name to an endpoint + key, and `AgentSpec(provider, model)` selects per agent —
+so a single role's whitelist can freely mix providers, and the Senior's
+relaunch-ladder climbs across them:
+
+```
+tier 1  local-llama  local       llama3.1:8b        -> http://localhost:11434/v1
+tier 1  gpt-mini     openai      gpt-4o-mini        -> (provider default)
+tier 2  haiku        anthropic   claude-haiku-4-5   -> (provider default)
+tier 2  or-70b       openrouter  llama-3.1-70b      -> https://openrouter.ai/api/v1
+tier 3  opus         anthropic   claude-opus-4-8    -> (provider default)
+```
+
+Clients are built lazily, so routing is testable with no SDKs installed; the
+OpenAI translation (tool results become `role:"tool"` messages) is verified via a
+fake client. Keys resolve from `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` /
+`OPENROUTER_API_KEY`; `local` defaults to Ollama (`LOCAL_AI_BASE_URL` to
+repoint). `pip install "ironclaw[all]"` for both SDKs.
 
 ### Project workspace & task dependencies ✅
 
@@ -260,6 +285,7 @@ python -m ironclaw.demo_senior     # Senior closes the failure loop (relaunch la
 python -m ironclaw.demo_lab        # full institute: PI -> Senior -> Postdoc -> PhD
 python -m ironclaw.demo_infra      # custodian: survey, onboard slurm, harvest, repair
 python -m ironclaw.demo_tui        # sentence -> decomposed lab -> rendered tree
+python -m ironclaw.demo_providers  # one PhD ladder spanning 4 providers
 python -m unittest discover -s tests
 
 # live: a real cheap model drives the PhD slice (needs an API key)
@@ -272,9 +298,10 @@ ANTHROPIC_API_KEY=... python examples/run_phd_live.py claude-haiku-4-5
   scheduler, ticks admission, and drives resume when jobs finish (today the
   demos play scheduler by hand). Persist the scheduler queue for cross-restart
   recovery.
-- OpenAI / OpenRouter / self-hosted adapters behind the neutral interface (the
-  Anthropic one is done), plus an inference-budget resource dimension
-  (tokens/rate/$ per provider) — same lease pattern as compute.
+- An **inference-budget resource dimension** (tokens/rate/$ per provider) — same
+  lease pattern as compute; and provider-agnostic reviewer/authoring calls (the
+  one-shot `llm_reviewer` / `llm_decomposer` use Anthropic structured outputs
+  today, though PhD execution already runs on any provider).
 - Run the authoring seams **live** on a real model end-to-end (the `llm_*`
   implementations exist; they need a key + a real task to exercise): PI
   decomposition, Senior reformulate/split, the Postdoc's `llm_reviewer`.

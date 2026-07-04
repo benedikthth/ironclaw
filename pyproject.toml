@@ -11,7 +11,8 @@ dependencies = []  # core is stdlib-only; provider adapters add optional extras
 
 [project.optional-dependencies]
 anthropic = ["anthropic>=0.40"]
-openai = ["openai>=1.40"]
+openai = ["openai>=1.40"]  # also serves OpenRouter + local (Ollama/vLLM/LM Studio)
+all = ["anthropic>=0.40", "openai>=1.40"]
 
 [tool.setuptools.packages.find]
 include = ["ironclaw*"]

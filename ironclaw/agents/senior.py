@@ -199,22 +199,32 @@ def _split(
     return SupervisionResult(task.id, TaskStatus.ESCALATED, last, attempts, to_pi, sub_results)
 
 
-def anthropic_phd_runner(skills_root: str | None = None, *, api_key: str | None = None) -> PhDRunner:
-    """Default runner: a real Claude-backed PhD on the assigned agent's model."""
+def provider_runner(registry=None, *, skills_root: str | None = None) -> PhDRunner:
+    """Real-PhD runner that routes each agent to its own provider/model via the
+    registry. The assigned ``AgentSpec.provider`` picks the endpoint, so one lab
+    can freely mix Anthropic / OpenAI / OpenRouter / local models."""
+    from ..providers.registry import default_registry
+
+    registry = registry or default_registry()
 
     def run(task: Task, agent: AgentSpec, budget_iterations: int, workspace: str) -> TaskResult:
-        from ..providers.anthropic import AnthropicProvider
         from ..runtime.loop import LoopConfig
         from .phd import run_phd
 
-        provider = AnthropicProvider(model=agent.model, api_key=api_key)
+        provider = registry.build(agent.provider, agent.model)
         outcome = run_phd(
-            task=task,
-            provider=provider,
-            workspace=workspace,
-            skills_root=skills_root,
+            task=task, provider=provider, workspace=workspace, skills_root=skills_root,
             config=LoopConfig(max_iterations=budget_iterations),
         )
         return outcome.result
 
     return run
+
+
+def anthropic_phd_runner(skills_root: str | None = None, *, api_key: str | None = None) -> PhDRunner:
+    """Convenience: a runner backed by Anthropic only (for `provider="anthropic"`
+    agents). Prefer ``provider_runner`` with a registry for multi-provider labs."""
+    from ..providers.registry import ProviderConfig, ProviderRegistry
+
+    reg = ProviderRegistry([ProviderConfig("anthropic", "anthropic", api_key=api_key)])
+    return provider_runner(reg, skills_root=skills_root)
