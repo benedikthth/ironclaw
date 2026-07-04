@@ -87,6 +87,21 @@ scheduler doesn't gate reasoning loops (cheap, I/O-bound); it gates the heavy
 - v2: preemption and fair-share weighting (backfill can starve a large job;
   Slurm-style reservations are the intended fix).
 
+### Real provider adapter ✅
+
+`ironclaw/providers/anthropic.py` drives a live Claude model behind the neutral
+interface — deliberately thin (one Messages call per turn, no sampling params,
+no thinking config) so a cheap PhD model and an expensive PI model use identical
+code. Proven end-to-end: **Haiku 4.5 drives the PhD slice to a verified pass** —
+consulting the skill, writing the transform, and submitting on its own — with no
+scripted provider (`examples/run_phd_live.py`).
+
+> Running it live surfaced a real harness bug the fake provider never could: the
+> model did the work correctly but hit the iteration budget before calling
+> `submit_result`, and the loop escalated a *finished* task. Fixed — mechanical
+> verification, not the model's submit call, is the source of truth: at budget
+> exhaustion the loop passes work that satisfies the acceptance contract.
+
 ### Control model ✅
 
 The institute's supervision rules as typed contracts + a deterministic baseline
@@ -109,6 +124,9 @@ python -m ironclaw.demo            # PhD slice: skill reuse → transform → ve
 python -m ironclaw.demo_async      # durable suspend/resume across a real job
 python -m ironclaw.demo_scheduler  # backfill: CPU job not blocked behind GPU jobs
 python -m unittest discover -s tests
+
+# live: a real cheap model drives the PhD slice (needs an API key)
+ANTHROPIC_API_KEY=... python examples/run_phd_live.py claude-haiku-4-5
 ```
 
 ## Roadmap
@@ -117,9 +135,9 @@ python -m unittest discover -s tests
   scheduler, ticks admission, and drives resume when jobs finish (today the
   demos play scheduler by hand). Persist the scheduler queue for cross-restart
   recovery.
-- Real provider adapters (Anthropic first) behind the neutral interface, and an
-  inference-budget resource dimension (tokens/rate/$ per provider) — same lease
-  pattern as compute.
+- OpenAI / OpenRouter / self-hosted adapters behind the neutral interface (the
+  Anthropic one is done), plus an inference-budget resource dimension
+  (tokens/rate/$ per provider) — same lease pattern as compute.
 - Wire the control model into a running **Senior** loop (consume `Escalation`,
   act on the `Disposition`) and a **Postdoc** review gate.
 - **PI** decomposition (problem → projects) and the lab lifecycle.

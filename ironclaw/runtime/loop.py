@@ -32,7 +32,10 @@ from .state import PersistedTask, save_state
 
 @dataclass
 class LoopConfig:
-    max_iterations: int = 12
+    # Cheap models explore more before closing out, so give a little headroom.
+    # Budget exhaustion is still a hard stop, but see the exhaustion path in
+    # _drive: work that satisfies the contract passes even without submit_result.
+    max_iterations: int = 16
 
 
 @dataclass
@@ -159,12 +162,31 @@ def _drive(
             if outcome is not None:
                 return outcome
 
-    # Budget exhausted: escalate rather than silently fail.
+    # Budget exhausted. Mechanical verification — not the model's submit call — is
+    # the source of truth: if the acceptance contract is satisfied, the task is
+    # done even though the PhD never formally submitted (common with cheap models
+    # that do the work but forget the closing step). Only escalate if it truly
+    # isn't done.
+    checks = verify(task, ctx.workspace)
+    if all_passed(checks):
+        return LoopOutcome(
+            TaskResult(
+                task_id=task.id,
+                status=TaskStatus.PASSED,
+                checks=checks,
+                summary=(
+                    "Acceptance criteria satisfied at budget exhaustion (the PhD "
+                    "completed the work but did not call submit_result)."
+                ),
+                iterations=iterations,
+            ),
+            messages,
+        )
     return LoopOutcome(
         TaskResult(
             task_id=task.id,
             status=TaskStatus.ESCALATED,
-            checks=verify(task, ctx.workspace),
+            checks=checks,
             summary=(
                 f"Iteration budget ({max_iterations}) exhausted without passing "
                 "verification. Escalating to the Senior Researcher."
