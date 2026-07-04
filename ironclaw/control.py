@@ -196,6 +196,7 @@ def escalate(
     catalog: AgentCatalog,
     agent_id: str,
     prior_relaunches: int = 0,
+    max_relaunches: int = 2,
     intractable: bool = False,
 ) -> Escalation:
     """Build the structured Escalation a supervisor receives on failure.
@@ -217,6 +218,7 @@ def escalate(
         agent_id=agent_id,
         catalog=catalog,
         prior_relaunches=prior_relaunches,
+        max_relaunches=max_relaunches,
     )
     notes = result.summary or ""
     if failing:

@@ -102,6 +102,25 @@ scripted provider (`examples/run_phd_live.py`).
 > verification, not the model's submit call, is the source of truth: at budget
 > exhaustion the loop passes work that satisfies the acceptance contract.
 
+### Senior supervision loop ✅
+
+`ironclaw/agents/senior.py` ties the control model to the real executor and
+closes the failure loop. The Senior runs a PhD; on failure it consumes the
+structured `Escalation`, reads the suggested `Disposition`, and acts:
+
+- **RELAUNCH_STRONGER** → re-assign the PhD to the next agent up its whitelist,
+  with a larger iteration budget.
+- **REFORMULATE / RETRY_SAME / SPLIT** → grant more budget and re-run (a
+  mechanical fallback; content-authoring reformulate/split is the LLM-Senior
+  seam, and slots in here).
+- **ESCALATE_TO_PI** → hand the failure up to the PI — the only non-pass exit.
+
+Termination is guaranteed, not hoped for: every non-pass attempt bumps the
+relaunch count, and the baseline policy escalates to the PI once it hits the cap,
+so **a Senior cannot tirespin — it escalates.** The demo shows the ladder:
+`cheapo → moderate → strong → passed`, budget growing each rung. Fully tested
+with a deterministic runner; `anthropic_phd_runner()` drives real PhDs.
+
 ### Control model ✅
 
 The institute's supervision rules as typed contracts + a deterministic baseline
@@ -123,6 +142,7 @@ policy (`ironclaw/control.py`):
 python -m ironclaw.demo            # PhD slice: skill reuse → transform → verify
 python -m ironclaw.demo_async      # durable suspend/resume across a real job
 python -m ironclaw.demo_scheduler  # backfill: CPU job not blocked behind GPU jobs
+python -m ironclaw.demo_senior     # Senior closes the failure loop (relaunch ladder)
 python -m unittest discover -s tests
 
 # live: a real cheap model drives the PhD slice (needs an API key)
@@ -138,8 +158,11 @@ ANTHROPIC_API_KEY=... python examples/run_phd_live.py claude-haiku-4-5
 - OpenAI / OpenRouter / self-hosted adapters behind the neutral interface (the
   Anthropic one is done), plus an inference-budget resource dimension
   (tokens/rate/$ per provider) — same lease pattern as compute.
-- Wire the control model into a running **Senior** loop (consume `Escalation`,
-  act on the `Disposition`) and a **Postdoc** review gate.
+- **LLM-driven Senior** for the content-authoring dispositions — reformulate a
+  task's goal/criteria, or split it into subtasks (the deterministic loop and the
+  seam are in place).
+- **Postdoc** review gate (blocking, iteration-boxed) between PhD submission and
+  the Senior.
 - **PI** decomposition (problem → projects) and the lab lifecycle.
 - The **Infrastructure Manager** agent + resource registry (GPU/storage/slurm
   leases) on top of the skills custodian surface.
