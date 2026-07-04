@@ -32,9 +32,10 @@ infinite spend.
 
 Implemented and tested end-to-end with **no API key or network** — a
 deterministic `FakeProvider` drives the harness, so the mechanics are
-CI-testable and token-free. 40 tests, stdlib-only (the `anthropic` adapter is an
+CI-testable and token-free. 50 tests, stdlib-only (the `anthropic` adapter is an
 optional extra). The full org — PI → Senior → Postdoc → PhD — runs top to bottom,
-emitting a live event stream the whole way.
+emitting a live event stream the whole way, with an Infrastructure Manager
+custodian off to the side.
 
 ### PhD vertical slice ✅
 
@@ -103,6 +104,31 @@ scripted provider (`examples/run_phd_live.py`).
 > `submit_result`, and the loop escalated a *finished* task. Fixed — mechanical
 > verification, not the model's submit call, is the source of truth: at budget
 > exhaustion the loop passes work that satisfies the acceptance contract.
+
+### Infrastructure Manager (custodian) ✅
+
+A sibling service to the org hierarchy — **you talk to it directly**; its public
+methods are the admin channel (a CLI / Telegram / LLM front-end maps utterances
+onto them). `ironclaw/infra.py`:
+
+- **Wake & survey**: inventories CPU/mem/disk/GPU on first run and raises
+  **guardrails** for what not to touch (a near-full partition → "do not write
+  large artifacts here"). Feeds the scheduler via `resource_pool()` — the IM owns
+  *what exists*, the scheduler enforces *what runs*.
+- **Onboard by conversation**: hand it a resource (`{slurm host, user, password}`)
+  and a probe; on success it packages a **clean skill** and registers the
+  resource. Secrets are kept as credential *handles* — never written into the
+  skill folder (verified by test).
+- **Skill custody**: validate + dedupe on every registration (identical dupes
+  skipped, name conflicts rejected), and **proactively harvest** skills a PhD
+  left behind — the dumb PhD never had to notify, the eager one that notifies
+  thrice is deduped.
+- **Skill failure → notify → fix**: on a use-time failure the skill is
+  quarantined (no PhD is handed a broken recipe), an event fires, and a `fixer`
+  seam (LLM/human) repairs and republishes it — else it stays an open repair task.
+
+The `demo_infra` runs the whole lifecycle — survey, onboard slurm, harvest,
+quarantine+repair — streaming events the whole way.
 
 ### Observability & human-in-the-loop ✅
 
@@ -190,6 +216,7 @@ python -m ironclaw.demo_async      # durable suspend/resume across a real job
 python -m ironclaw.demo_scheduler  # backfill: CPU job not blocked behind GPU jobs
 python -m ironclaw.demo_senior     # Senior closes the failure loop (relaunch ladder)
 python -m ironclaw.demo_lab        # full institute: PI -> Senior -> Postdoc -> PhD
+python -m ironclaw.demo_infra      # custodian: survey, onboard slurm, harvest, repair
 python -m unittest discover -s tests
 
 # live: a real cheap model drives the PhD slice (needs an API key)
@@ -208,7 +235,9 @@ ANTHROPIC_API_KEY=... python examples/run_phd_live.py claude-haiku-4-5
 - **LLM-driven authoring** at the seams (all wired, deterministic today): the PI
   authoring projects from a raw problem statement; the Senior authoring
   reformulated/split tasks; the Postdoc's `llm_reviewer` in the loop.
-- The **Infrastructure Manager** agent + resource registry (GPU/storage/slurm
-  leases) on top of the skills custodian surface.
+- An **LLM conversational front-end** for the Infrastructure Manager, so you talk
+  to it in plain language (the capability methods and a `fixer`/`prober` seam are
+  in place); real probers for slurm/ssh and an LLM `fixer` for broken skills.
 - UIs: web, TUI, Telegram — all consume the `observability` event stream and
-  drive the `Overseer` seam that already exist.
+  drive the `Overseer` (PI) and the Infrastructure Manager admin methods that
+  already exist.
