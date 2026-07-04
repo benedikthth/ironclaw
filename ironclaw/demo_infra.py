@@ -1,8 +1,11 @@
 """Infrastructure Manager demo: wake, onboard, harvest, repair — all observable.
 
 Talking to the custodian is just calling its methods (a CLI / Telegram / LLM
-front-end maps utterances onto these). Runs with no API key and no real cluster:
-the slurm probe is faked so the flow is visible end to end.
+front-end maps utterances onto these). Onboarding is generic — a cluster login
+node is used here only as *one example*; the identical flow onboards an SSH box,
+an HTTP API, or a dataset. There's no per-system feature: a PhD later uses
+whatever was onboarded via the general shell + the packaged skill. Runs with no
+API key and no real host (the probe is faked so the flow is visible end to end).
 
     python -m ironclaw.demo_infra
 """

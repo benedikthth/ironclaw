@@ -20,6 +20,7 @@ from ..tools.base import Tool, ToolContext
 from ..tools.files import ReadFile, WriteFile
 from ..tools.jobs import AwaitJob, StartJob
 from ..tools.python_exec import PythonExec
+from ..tools.shell import ShellExec
 from ..tools.skills import InvokeSkill
 from ..tools.submit import SubmitResult
 from ..runtime.loop import LoopConfig, LoopOutcome, resume_loop, run_loop
@@ -29,10 +30,13 @@ SYSTEM_TEMPLATE = """You are a PhD researcher at the Ironclaw institute. You own
 single task and must deliver artifacts that satisfy its acceptance criteria.
 
 Operating rules:
-- Prefer a registered skill over improvising any interaction with shared \
-infrastructure. Skills encode procedures that already work.
-- For long-running or queued work (training, slurm, crawls, long sleeps) use \
-start_job then await_job; never block inline.
+- You have a general shell: to interact with any external system (ssh into a \
+host, submit/poll a cluster job, call an API, run a CLI) just run the commands, \
+exactly as a researcher would. There is no special mode for any system.
+- Prefer a registered skill over improvising an interaction with shared \
+infrastructure. Skills encode procedures that already work; consult the catalog.
+- For long-running or queued work you must wait on, use start_job then \
+await_job; never block inline.
 - Produce durable artifacts (files in your workspace): reports as Markdown, code \
 as source files, collected data in a queryable format.
 - Test your own work before submitting. You are graded only on the acceptance \
@@ -49,6 +53,7 @@ def default_tools() -> list[Tool]:
         WriteFile(),
         ReadFile(),
         PythonExec(),
+        ShellExec(),
         InvokeSkill(),
         StartJob(),
         AwaitJob(),

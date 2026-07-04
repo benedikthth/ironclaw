@@ -18,13 +18,14 @@ class StartJob(Tool):
     name = "start_job"
     description = (
         "Submit a long-running or queued shell command as a durable background "
-        "job (training runs, slurm enqueue, crawls, sleeps). Returns a job_id "
-        "immediately. Do NOT block on it inline — call await_job to wait."
+        "job (a training run, a queued cluster job, a crawl, a long sleep). "
+        "Returns a job_id immediately. Do NOT block on it inline — call await_job "
+        "to wait; you will be suspended and resumed when it finishes."
     )
     input_schema = {
         "type": "object",
         "properties": {
-            "kind": {"type": "string", "description": "e.g. 'train', 'slurm', 'crawl'."},
+            "kind": {"type": "string", "description": "A short label for the job, e.g. 'train' or 'crawl'."},
             "command": {"type": "string", "description": "Shell command to run."},
             "resources": {
                 "type": "object",
@@ -36,8 +37,9 @@ class StartJob(Tool):
             "domain": {
                 "type": "string",
                 "default": "local",
-                "description": "'local' runs here under the resource pool; "
-                "'slurm:<partition>' delegates admission to the cluster.",
+                "description": "'local' runs here under the resource pool; any other "
+                "value names an external scheduler that does its own admission (e.g. "
+                "a cluster's queue).",
             },
         },
         "required": ["kind", "command"],

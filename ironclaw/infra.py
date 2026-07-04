@@ -50,7 +50,7 @@ def slugify(name: str) -> str:
 @dataclass
 class Resource:
     id: str
-    kind: str  # "compute" | "gpu" | "storage" | "slurm" | ...
+    kind: str  # free-form: "compute" | "gpu" | "storage" | "host" | "api" | ...
     capacity: dict[str, float] = field(default_factory=dict)  # feeds the scheduler
     spec: dict = field(default_factory=dict)  # non-secret connection details
     status: str = "ok"

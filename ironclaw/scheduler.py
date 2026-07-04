@@ -13,10 +13,10 @@ Two design choices matter:
   for a GPU to free. Pure FIFO would make the CPU job wait behind the GPU job for
   no reason.
 
-- **Resource domains.** A job targeting an external scheduler (Slurm) is not
-  gated by *our* local pool — the cluster owns that admission. ``domain="local"``
-  jobs are leased against the pool; other domains are handed straight to their
-  backend.
+- **Resource domains.** A job handed to an external scheduler (e.g. a cluster's
+  own queue) is not gated by *our* local pool — that system owns its admission.
+  ``domain="local"`` jobs are leased against the pool; other domains are handed
+  straight to their backend. Nothing here is specialized to any one system.
 
 The scheduler implements the same ``submit``/``poll`` shape as a JobBackend, so
 it is a drop-in for what the PhD already awaits: "queued" and "running" both read

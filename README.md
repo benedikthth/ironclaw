@@ -32,7 +32,7 @@ infinite spend.
 
 Implemented and tested end-to-end with **no API key or network** — a
 deterministic `FakeProvider` drives the harness, so the mechanics are
-CI-testable and token-free. 81 tests, stdlib-only (the `anthropic`/`openai`
+CI-testable and token-free. 85 tests, stdlib-only (the `anthropic`/`openai`
 adapters are optional extras). A lab starts from a **sentence**, the full org — PI → Senior →
 Postdoc → PhD — runs top to bottom emitting a live event stream, a **TUI** folds
 that stream into a live tree, and an Infrastructure Manager custodian sits off to
@@ -47,9 +47,14 @@ The PhD is ~90% of the real work, so it landed first.
   freely per agent via the `ProviderRegistry`.
 - The PhD agent loop (`ironclaw/runtime/loop.py`): model ⇄ tools → submit →
   **verify against acceptance criteria** → retry or escalate.
-- Tools (`ironclaw/tools/`): `write_file`, `read_file`, `python_exec`,
+- Tools (`ironclaw/tools/`): `write_file`, `read_file`, `python_exec`, `shell`,
   `invoke_skill`, `start_job`, `await_job`, `submit_result` — sandboxed to a
-  task workspace.
+  task workspace. The general `shell` is deliberately unspecialized: a PhD
+  interacts with *any* external system (ssh, cluster `sbatch`/`squeue`, an API,
+  a CLI) by running the commands a researcher would — there is **no per-system
+  feature** anywhere in the institute. Interacting with something new = the
+  Infrastructure Manager onboards it + packages a skill, and the PhD follows the
+  skill via `shell`. (So "slurm" is not a subsystem — it's just commands you run.)
 - Skills registry (`ironclaw/skills.py`): progressive-disclosure `SKILL.md`
   folders; the surface the Infrastructure Manager will be custodian of.
 - Mechanical verification (`ironclaw/verify.py`): `file_exists` + `command`
@@ -321,10 +326,11 @@ ANTHROPIC_API_KEY=... python examples/run_phd_live.py claude-haiku-4-5
 
 ## Roadmap
 
-- **Real execution backends** as `JobBackend`s — `SlurmBackend` (`sbatch`/`squeue`),
-  SSH, Docker, Modal. Today "slurm" is only a scheduler *domain label* + a faked
-  onboarding probe; every job actually runs as a local subprocess. The seam
-  (suspend/resume, scheduler admission) already handles a real backend.
+- **Real execution backends** as `JobBackend`s — SSH, Docker, Modal, a cluster
+  queue. Today every job runs as a local subprocess; a non-local `domain` just
+  skips local-pool gating. This is infrastructure plumbing, *not* a per-system
+  feature: a PhD already reaches any system through the general `shell` + a
+  packaged skill. A backend only adds durable submit/poll for that transport.
 - The **daemon**: an always-on service that owns the durable task store + the
   scheduler, ticks admission, and drives resume when jobs finish (today the
   demos play scheduler by hand). Persist the scheduler queue for cross-restart
