@@ -32,7 +32,8 @@ infinite spend.
 
 Implemented and tested end-to-end with **no API key or network** — a
 deterministic `FakeProvider` drives the harness, so the mechanics are
-CI-testable and token-free. 16 tests, stdlib-only.
+CI-testable and token-free. 33 tests, stdlib-only (the `anthropic` adapter is an
+optional extra). The full org — PI → Senior → Postdoc → PhD — runs top to bottom.
 
 ### PhD vertical slice ✅
 
@@ -102,6 +103,31 @@ scripted provider (`examples/run_phd_live.py`).
 > verification, not the model's submit call, is the source of truth: at budget
 > exhaustion the loop passes work that satisfies the acceptance contract.
 
+### Full org: PI → Senior → Postdoc → PhD ✅
+
+The whole institute runs top to bottom. The **PI** (`ironclaw/agents/pi.py`)
+decomposes a problem into projects, hands each project's tasks to the Senior
+layer, aggregates results, and owns the top gate — a task a Senior gives up on
+lands in the PI's action list. The **Postdoc** (`ironclaw/agents/postdoc.py`) is
+the submission-quality gate between PhD and Senior: blocking, iteration-boxed,
+reviewing for the quality the acceptance criteria couldn't encode, with the
+narrow typed flag-up channel (misspecified / suspected-intractable).
+
+Each layer is unaware of the ones below it — a PI hands the Senior a `runner`,
+and in production that runner is the Postdoc-gated real-PhD runner, so **one call
+drives the entire institute.** The `demo_lab` shows all three behaviors in one
+lab: a task solved outright, one the Senior relaunches onto a stronger agent, and
+an impossible one that bubbles to the PI:
+
+```
+project characterize [passed]
+  task measure     [passed]    via cheapo
+project stress [escalated]
+  task hard        [passed]    via cheapo -> moderate
+  task impossible  [escalated] via cheapo -> moderate
+PI action list: impossible -> escalate_to_pi
+```
+
 ### Senior supervision loop ✅
 
 `ironclaw/agents/senior.py` ties the control model to the real executor and
@@ -143,6 +169,7 @@ python -m ironclaw.demo            # PhD slice: skill reuse → transform → ve
 python -m ironclaw.demo_async      # durable suspend/resume across a real job
 python -m ironclaw.demo_scheduler  # backfill: CPU job not blocked behind GPU jobs
 python -m ironclaw.demo_senior     # Senior closes the failure loop (relaunch ladder)
+python -m ironclaw.demo_lab        # full institute: PI -> Senior -> Postdoc -> PhD
 python -m unittest discover -s tests
 
 # live: a real cheap model drives the PhD slice (needs an API key)
@@ -158,12 +185,9 @@ ANTHROPIC_API_KEY=... python examples/run_phd_live.py claude-haiku-4-5
 - OpenAI / OpenRouter / self-hosted adapters behind the neutral interface (the
   Anthropic one is done), plus an inference-budget resource dimension
   (tokens/rate/$ per provider) — same lease pattern as compute.
-- **LLM-driven Senior** for the content-authoring dispositions — reformulate a
-  task's goal/criteria, or split it into subtasks (the deterministic loop and the
-  seam are in place).
-- **Postdoc** review gate (blocking, iteration-boxed) between PhD submission and
-  the Senior.
-- **PI** decomposition (problem → projects) and the lab lifecycle.
+- **LLM-driven authoring** at the seams (all wired, deterministic today): the PI
+  authoring projects from a raw problem statement; the Senior authoring
+  reformulated/split tasks; the Postdoc's `llm_reviewer` in the loop.
 - The **Infrastructure Manager** agent + resource registry (GPU/storage/slurm
   leases) on top of the skills custodian surface.
 - UIs: web, TUI, Telegram over one API.
