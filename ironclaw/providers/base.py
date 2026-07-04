@@ -35,6 +35,9 @@ class AssistantTurn:
 
     text: str = ""
     tool_calls: list[ToolCall] = field(default_factory=list)
+    # Optional per-turn token usage for the observability/cost stream, e.g.
+    # {"input_tokens": N, "output_tokens": M, "model": "..."}.
+    usage: dict[str, Any] | None = None
 
 
 # Neutral message helpers. A message is {"role", "content"} where content is a

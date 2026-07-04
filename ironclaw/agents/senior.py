@@ -32,6 +32,7 @@ from ..control import (
     Role,
     escalate,
 )
+from ..observability import active_recorder
 
 
 class PhDRunner(Protocol):
@@ -76,9 +77,12 @@ def supervise(
     relaunches = 0
     attempts: list[Attempt] = []
 
+    rec = active_recorder()
     while True:
         agent = catalog.get(agent_id)
         ws = os.path.join(workspace, f"attempt_{len(attempts)}")
+        rec.emit("attempt", role="senior", task_id=task.id, agent_id=agent_id,
+                 data={"budget": budget, "n": len(attempts)})
         result = runner(task, agent, budget, ws)
 
         if result.status is TaskStatus.PASSED:
@@ -97,6 +101,9 @@ def supervise(
         )
         disposition = esc.diagnosis.suggested_disposition
         attempts.append(Attempt(agent_id, result.status, budget, disposition))
+        rec.emit("disposition", role="senior", task_id=task.id, agent_id=agent_id,
+                 message=disposition.value,
+                 data={"failure_kind": esc.diagnosis.failure_kind.value})
 
         if disposition is Disposition.ESCALATE_TO_PI:
             to_pi = escalate(
@@ -108,6 +115,8 @@ def supervise(
                 prior_relaunches=relaunches,
                 max_relaunches=max_relaunches,
             )
+            rec.emit("escalation", role="senior", task_id=task.id, message="to_pi",
+                     data={"notes": to_pi.diagnosis.notes})
             return SupervisionResult(task.id, TaskStatus.ESCALATED, result, attempts, to_pi)
 
         if disposition is Disposition.RELAUNCH_STRONGER:

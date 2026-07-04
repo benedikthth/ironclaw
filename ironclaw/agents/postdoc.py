@@ -25,6 +25,7 @@ from typing import Protocol
 
 from ..contracts import Task, TaskResult, TaskStatus
 from ..control import FailureKind, FlagKind, PostdocReview, ReviewVerdict
+from ..observability import active_recorder
 
 
 class Reviewer(Protocol):
@@ -60,6 +61,10 @@ def reviewed_run(
             return result
 
         review = reviewer(task, result, ws)
+        active_recorder().emit(
+            "review", role="postdoc", task_id=task.id, message=review.verdict.value,
+            data={"round": round_i, "flag": review.flag.value if review.flag else None},
+        )
 
         if review.flag is not None:
             result.status = TaskStatus.ESCALATED

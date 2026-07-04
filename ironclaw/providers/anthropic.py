@@ -57,7 +57,12 @@ class AnthropicProvider(LLMProvider):
                 text_parts.append(block.text)
             elif block.type == "tool_use":
                 calls.append(ToolCall(id=block.id, name=block.name, arguments=dict(block.input)))
-        return AssistantTurn(text="".join(text_parts), tool_calls=calls)
+        usage = {
+            "input_tokens": getattr(resp.usage, "input_tokens", 0),
+            "output_tokens": getattr(resp.usage, "output_tokens", 0),
+            "model": self.model,
+        }
+        return AssistantTurn(text="".join(text_parts), tool_calls=calls, usage=usage)
 
 
 def _tool_to_anthropic(spec: ToolSpec) -> dict[str, Any]:

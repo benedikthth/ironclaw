@@ -32,8 +32,9 @@ infinite spend.
 
 Implemented and tested end-to-end with **no API key or network** — a
 deterministic `FakeProvider` drives the harness, so the mechanics are
-CI-testable and token-free. 33 tests, stdlib-only (the `anthropic` adapter is an
-optional extra). The full org — PI → Senior → Postdoc → PhD — runs top to bottom.
+CI-testable and token-free. 40 tests, stdlib-only (the `anthropic` adapter is an
+optional extra). The full org — PI → Senior → Postdoc → PhD — runs top to bottom,
+emitting a live event stream the whole way.
 
 ### PhD vertical slice ✅
 
@@ -102,6 +103,25 @@ scripted provider (`examples/run_phd_live.py`).
 > `submit_result`, and the loop escalated a *finished* task. Fixed — mechanical
 > verification, not the model's submit call, is the source of truth: at budget
 > exhaustion the loop passes work that satisfies the acceptance contract.
+
+### Observability & human-in-the-loop ✅
+
+Every layer emits typed events to an **ambient event stream**
+(`ironclaw/observability.py`) — the single substrate the planned web/TUI/Telegram
+UIs will consume. The recorder is ambient via a context var, so even a tool can
+`active_recorder().emit(...)` without threading a parameter through every
+signature; an orchestration entry point wraps its run in `using(recorder)`.
+
+- **Sinks**: `jsonl_sink` (durable audit log / UI feed), `console_sink` (live
+  progress). The `demo_lab` streams the whole org as it runs — relaunch ladders,
+  dispositions with their failure kind, the escalation to the PI, the PI's call.
+- **Cost view**: providers report per-turn token usage on the stream;
+  `total_usage` / `usage_by_agent` aggregate it — the cheap-vs-strong spend is
+  visible per agent. `examples/run_phd_live.py` prints real token cost.
+- **Human-in-the-loop**: the PI consults an `Overseer` on every task a Senior
+  gives up on — this is "the PI steps in if direction is drifting", made
+  pluggable. `AutoOverseer` (default) runs a lab unattended; `ConsoleOverseer`
+  prompts to accept / retry / abandon. A UI plugs in at the same seam.
 
 ### Full org: PI → Senior → Postdoc → PhD ✅
 
@@ -190,4 +210,5 @@ ANTHROPIC_API_KEY=... python examples/run_phd_live.py claude-haiku-4-5
   reformulated/split tasks; the Postdoc's `llm_reviewer` in the loop.
 - The **Infrastructure Manager** agent + resource registry (GPU/storage/slurm
   leases) on top of the skills custodian surface.
-- UIs: web, TUI, Telegram over one API.
+- UIs: web, TUI, Telegram — all consume the `observability` event stream and
+  drive the `Overseer` seam that already exist.

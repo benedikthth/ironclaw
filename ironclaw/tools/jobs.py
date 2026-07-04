@@ -48,6 +48,7 @@ class StartJob(Tool):
             raise ToolError("no job backend available")
         # Build a ResourceRequest lazily so raw backends (which ignore it) don't
         # need the scheduler imported.
+        from ..observability import active_recorder
         from ..scheduler import ResourceRequest
 
         request = ResourceRequest(
@@ -56,6 +57,10 @@ class StartJob(Tool):
             domain=args.get("domain", "local"),
         )
         job_id = ctx.jobs.submit(args["kind"], args["command"], request)
+        active_recorder().emit(
+            "job.submit", role="phd", message=job_id,
+            data={"kind": args["kind"], "resources": request.resources},
+        )
         return f"submitted {args['kind']} job: {job_id}"
 
 

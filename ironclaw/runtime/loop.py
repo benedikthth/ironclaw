@@ -25,6 +25,7 @@ from ..providers.base import (
     tool_result,
     user_text,
 )
+from ..observability import active_recorder
 from ..tools.base import Tool, ToolContext, ToolError, spec_of
 from ..verify import all_passed, verify
 from .state import PersistedTask, save_state
@@ -115,11 +116,16 @@ def _drive(
 ) -> LoopOutcome:
     by_name = {t.name: t for t in tools}
     specs = [spec_of(t) for t in tools]
+    rec = active_recorder()
+    if iterations == 0:
+        rec.emit("task.start", role="phd", task_id=task.id, message=task.goal)
 
     while iterations < max_iterations:
         iterations += 1
         turn: AssistantTurn = provider.complete(system, messages, specs)
         messages.append(assistant_message(turn))
+        if turn.usage:
+            rec.emit("usage", role="phd", task_id=task.id, data=dict(turn.usage))
 
         if not turn.tool_calls:
             messages.append(
@@ -152,9 +158,11 @@ def _drive(
             if tool is None:
                 messages.append(tool_result(call.id, f"unknown tool {call.name!r}", is_error=True))
                 continue
+            rec.emit("tool.call", role="phd", task_id=task.id, message=call.name)
             try:
                 messages.append(tool_result(call.id, tool.run(call.arguments, ctx)))
             except ToolError as e:
+                rec.emit("tool.error", role="phd", task_id=task.id, message=call.name, data={"error": str(e)})
                 messages.append(tool_result(call.id, f"error: {e}", is_error=True))
 
         if "submission" in ctx.scratch:
@@ -169,6 +177,8 @@ def _drive(
     # isn't done.
     checks = verify(task, ctx.workspace)
     if all_passed(checks):
+        rec.emit("task.result", role="phd", task_id=task.id, message="passed (no submit)",
+                 data={"status": "passed", "iterations": iterations})
         return LoopOutcome(
             TaskResult(
                 task_id=task.id,
@@ -182,6 +192,8 @@ def _drive(
             ),
             messages,
         )
+    rec.emit("task.result", role="phd", task_id=task.id, message="escalated",
+             data={"status": "escalated", "iterations": iterations})
     return LoopOutcome(
         TaskResult(
             task_id=task.id,
@@ -238,6 +250,7 @@ def _handle_await(
             awaiting={"job_id": job_id, "call_id": call.id},
         ),
     )
+    active_recorder().emit("job.await", role="phd", task_id=task.id, message=job_id)
     return LoopOutcome(
         TaskResult(
             task_id=task.id,
@@ -257,9 +270,13 @@ def _finalize_submission(
     messages: list[dict[str, Any]],
     iterations: int,
 ) -> LoopOutcome | None:
+    rec = active_recorder()
     checks = verify(task, ctx.workspace)
     if all_passed(checks):
         sub = ctx.scratch.pop("submission")
+        rec.emit("verify", role="phd", task_id=task.id, data={"passed": True})
+        rec.emit("task.result", role="phd", task_id=task.id, message="passed",
+                 data={"status": "passed", "iterations": iterations})
         return LoopOutcome(
             TaskResult(
                 task_id=task.id,
@@ -273,6 +290,7 @@ def _finalize_submission(
         )
     # Failed verification: report the failing checks and let the PhD fix.
     ctx.scratch.pop("submission")
+    rec.emit("verify", role="phd", task_id=task.id, data={"passed": False})
     failing = "\n".join(
         f"- FAIL [{c.criterion.description}]: {c.detail}" for c in checks if not c.passed
     )

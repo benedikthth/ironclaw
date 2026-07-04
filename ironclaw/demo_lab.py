@@ -15,6 +15,7 @@ import tempfile
 from .agents.pi import Problem, ProjectSpec, run_lab
 from .contracts import Task, TaskResult, TaskStatus
 from .control import AgentCatalog, AgentSpec, Role
+from .observability import Recorder, console_sink
 
 
 def main() -> None:
@@ -52,6 +53,9 @@ def main() -> None:
             task.id, TaskStatus.PASSED if ok else TaskStatus.ESCALATED, iterations=budget
         )
 
+    # Watch the institute happen live via the event stream, then print the tree.
+    recorder = Recorder(sinks=[console_sink()])
+    print("--- live event stream ---")
     with tempfile.TemporaryDirectory() as tmp:
         lab = run_lab(
             problem=problem,
@@ -60,9 +64,10 @@ def main() -> None:
             workspace=tmp,
             phd_agent_id="cheapo",
             max_relaunches=1,
+            recorder=recorder,
         )
 
-    print(f"LAB: {lab.statement}")
+    print(f"\n--- result tree ---\nLAB: {lab.statement}")
     print(f"status: {lab.status.value}\n")
     for proj in lab.projects:
         print(f"  project {proj.project_id} [{proj.status.value}]")
