@@ -99,6 +99,7 @@ class FailureKind(str, Enum):
     BUDGET_EXHAUSTED = "budget_exhausted"
     VERIFICATION_FAILED = "verification_failed"
     POSTDOC_REJECTED = "postdoc_rejected"
+    MISSPECIFIED = "misspecified"  # postdoc flag: acceptance criteria are wrong
     SUSPECTED_INTRACTABLE = "suspected_intractable"
 
 
@@ -183,6 +184,9 @@ def suggest_disposition(
         return Disposition.REFORMULATE
     if failure_kind is FailureKind.VERIFICATION_FAILED:
         return Disposition.REFORMULATE
+    if failure_kind is FailureKind.MISSPECIFIED:
+        # The criteria themselves are wrong — rewrite the task, don't just retry.
+        return Disposition.REFORMULATE
     if failure_kind is FailureKind.POSTDOC_REJECTED:
         return Disposition.SPLIT
     return Disposition.RETRY_SAME
@@ -207,6 +211,9 @@ def escalate(
     failing = [c for c in result.checks if not c.passed]
     if intractable:
         failure_kind = FailureKind.SUSPECTED_INTRACTABLE
+    elif result.failure_kind:
+        # A gate (e.g. the Postdoc) already classified the failure — honor it.
+        failure_kind = FailureKind(result.failure_kind)
     elif result.status is TaskStatus.ESCALATED:
         failure_kind = FailureKind.BUDGET_EXHAUSTED
     else:

@@ -101,6 +101,10 @@ class TaskResult:
     checks: list[CheckResult] = field(default_factory=list)
     summary: str = ""
     iterations: int = 0
+    # Optional control-model FailureKind value (a plain string to keep contracts
+    # free of a control.py import). Set by a reviewer/gate to tell a supervisor
+    # *why* this failed — e.g. "postdoc_rejected" vs the default budget inference.
+    failure_kind: str | None = None
 
     def to_json(self) -> str:
         return json.dumps(_encode(self), indent=2, sort_keys=True)
