@@ -116,6 +116,7 @@ def run_lab(
     overseer: Overseer | None = None,
     recorder: Recorder | None = None,
     max_pi_retries: int = 3,
+    author=None,
 ) -> LabResult:
     overseer = overseer or AutoOverseer()
     with using(recorder):
@@ -131,7 +132,7 @@ def run_lab(
 
             for task in proj.tasks:
                 sup = _run_task(
-                    task, proj, catalog, runner, workspace, phd_agent_id, max_relaunches, base_budget
+                    task, proj, catalog, runner, workspace, phd_agent_id, max_relaunches, base_budget, author=author
                 )
                 # PI gate: a task the Senior gave up on comes here for a decision.
                 retries = 0
@@ -146,7 +147,7 @@ def run_lab(
                     retries += 1  # RETRY: another full run
                     sup = _run_task(
                         task, proj, catalog, runner, workspace, phd_agent_id,
-                        max_relaunches, base_budget, attempt_tag=f"retry{retries}",
+                        max_relaunches, base_budget, attempt_tag=f"retry{retries}", author=author,
                     )
                 task_results.append(sup)
                 if abandoned:
@@ -166,7 +167,7 @@ def run_lab(
 
 def _run_task(
     task, proj, catalog, runner, workspace, phd_agent_id, max_relaunches, base_budget,
-    *, attempt_tag: str = "",
+    *, attempt_tag: str = "", author=None,
 ) -> SupervisionResult:
     ws = f"{workspace}/{proj.id}/{task.id}{('/' + attempt_tag) if attempt_tag else ''}"
     return supervise(
@@ -177,4 +178,5 @@ def _run_task(
         phd_agent_id=phd_agent_id,
         max_relaunches=max_relaunches,
         base_budget=base_budget,
+        author=author,
     )

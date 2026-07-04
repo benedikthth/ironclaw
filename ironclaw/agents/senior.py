@@ -45,6 +45,14 @@ class PhDRunner(Protocol):
     ) -> TaskResult: ...
 
 
+class TaskAuthorLike(Protocol):
+    """Structural type for the Senior's authoring seam (see authoring.TaskAuthor).
+    Kept local to avoid an import cycle with the authoring module."""
+
+    def reformulate(self, task: Task, diagnosis) -> Task: ...
+    def split(self, task: Task, diagnosis) -> list[Task]: ...
+
+
 @dataclass
 class Attempt:
     agent_id: str
@@ -60,6 +68,7 @@ class SupervisionResult:
     result: TaskResult  # the terminal PhD result
     attempts: list[Attempt] = field(default_factory=list)
     escalation: Escalation | None = None  # set only when handed up to the PI
+    subtasks: list["SupervisionResult"] = field(default_factory=list)  # set when SPLIT
 
 
 def supervise(
@@ -71,6 +80,9 @@ def supervise(
     phd_agent_id: str,
     max_relaunches: int = 2,
     base_budget: int = 16,
+    author: "TaskAuthorLike | None" = None,
+    split_depth: int = 0,
+    max_split_depth: int = 1,
 ) -> SupervisionResult:
     agent_id = phd_agent_id
     budget = base_budget
@@ -81,12 +93,14 @@ def supervise(
     while True:
         agent = catalog.get(agent_id)
         ws = os.path.join(workspace, f"attempt_{len(attempts)}")
-        rec.emit("attempt", role="senior", task_id=task.id, agent_id=agent_id,
-                 data={"budget": budget, "n": len(attempts)})
+        rec.emit("attempt", role="senior", task_id=task.id, project_id=task.project_id,
+                 agent_id=agent_id, data={"budget": budget, "n": len(attempts)})
         result = runner(task, agent, budget, ws)
 
         if result.status is TaskStatus.PASSED:
             attempts.append(Attempt(agent_id, TaskStatus.PASSED, budget))
+            rec.emit("task.done", role="senior", task_id=task.id, project_id=task.project_id,
+                     message="passed", data={"status": "passed"})
             return SupervisionResult(task.id, TaskStatus.PASSED, result, attempts)
 
         # Non-pass: consume the escalation and read the suggested disposition.
@@ -101,8 +115,8 @@ def supervise(
         )
         disposition = esc.diagnosis.suggested_disposition
         attempts.append(Attempt(agent_id, result.status, budget, disposition))
-        rec.emit("disposition", role="senior", task_id=task.id, agent_id=agent_id,
-                 message=disposition.value,
+        rec.emit("disposition", role="senior", task_id=task.id, project_id=task.project_id,
+                 agent_id=agent_id, message=disposition.value,
                  data={"failure_kind": esc.diagnosis.failure_kind.value})
 
         if disposition is Disposition.ESCALATE_TO_PI:
@@ -115,8 +129,10 @@ def supervise(
                 prior_relaunches=relaunches,
                 max_relaunches=max_relaunches,
             )
-            rec.emit("escalation", role="senior", task_id=task.id, message="to_pi",
-                     data={"notes": to_pi.diagnosis.notes})
+            rec.emit("escalation", role="senior", task_id=task.id, project_id=task.project_id,
+                     message="to_pi", data={"notes": to_pi.diagnosis.notes})
+            rec.emit("task.done", role="senior", task_id=task.id, project_id=task.project_id,
+                     message="escalated", data={"status": "escalated"})
             return SupervisionResult(task.id, TaskStatus.ESCALATED, result, attempts, to_pi)
 
         if disposition is Disposition.RELAUNCH_STRONGER:
@@ -124,11 +140,60 @@ def supervise(
             # The policy only suggests RELAUNCH_STRONGER when one exists.
             agent_id = stronger.id  # type: ignore[union-attr]
 
-        # RELAUNCH_STRONGER, REFORMULATE, RETRY_SAME, SPLIT all re-run with more
-        # budget; each bumps the relaunch count, so the policy will escalate to the
-        # PI once the bound is hit.
+        # Content-authoring dispositions: if a Senior author is wired in, actually
+        # rewrite or split the work instead of just re-running with more budget.
+        elif author is not None and disposition is Disposition.REFORMULATE:
+            task = author.reformulate(task, esc.diagnosis)
+            rec.emit("reformulate", role="senior", task_id=task.id, message=task.goal[:60])
+        elif author is not None and disposition is Disposition.SPLIT and split_depth < max_split_depth:
+            return _split(
+                task=task, diagnosis=esc.diagnosis, catalog=catalog, runner=runner,
+                workspace=workspace, phd_agent_id=phd_agent_id, max_relaunches=max_relaunches,
+                base_budget=base_budget, author=author, split_depth=split_depth,
+                max_split_depth=max_split_depth, attempts=attempts, last=result, rec=rec,
+            )
+
+        # RELAUNCH_STRONGER / REFORMULATE / RETRY_SAME / (un-authored) SPLIT re-run
+        # with more budget; each bumps the relaunch count, so the policy escalates
+        # to the PI once the bound is hit.
         budget = int(budget * 1.5)
         relaunches += 1
+
+
+def _split(
+    *, task, diagnosis, catalog, runner, workspace, phd_agent_id, max_relaunches,
+    base_budget, author, split_depth, max_split_depth, attempts, last, rec,
+) -> SupervisionResult:
+    """Author subtasks and supervise each. The parent passes iff every subtask
+    passes; otherwise it escalates to the PI. Bounded: a subtask can't itself
+    split (``split_depth`` guard in the caller)."""
+    subtasks = author.split(task, diagnosis)
+    rec.emit("split", role="senior", task_id=task.id,
+             data={"subtasks": [s.id for s in subtasks]})
+    sub_results: list[SupervisionResult] = []
+    for st in subtasks:
+        sub_results.append(
+            supervise(
+                task=st, catalog=catalog, runner=runner,
+                workspace=os.path.join(workspace, f"split_{st.id}"),
+                phd_agent_id=phd_agent_id, max_relaunches=max_relaunches,
+                base_budget=base_budget, author=author,
+                split_depth=split_depth + 1, max_split_depth=max_split_depth,
+            )
+        )
+    if all(s.status is TaskStatus.PASSED for s in sub_results):
+        rec.emit("task.done", role="senior", task_id=task.id, project_id=task.project_id,
+                 message="passed", data={"status": "passed"})
+        return SupervisionResult(task.id, TaskStatus.PASSED, last, attempts, None, sub_results)
+    to_pi = escalate(
+        result=last, from_role=Role.SENIOR, to_role=Role.PI, catalog=catalog,
+        agent_id=phd_agent_id, prior_relaunches=max_relaunches, max_relaunches=max_relaunches,
+    )
+    rec.emit("escalation", role="senior", task_id=task.id, project_id=task.project_id,
+             message="to_pi", data={"notes": "split subtasks did not all pass"})
+    rec.emit("task.done", role="senior", task_id=task.id, project_id=task.project_id,
+             message="escalated", data={"status": "escalated"})
+    return SupervisionResult(task.id, TaskStatus.ESCALATED, last, attempts, to_pi, sub_results)
 
 
 def anthropic_phd_runner(skills_root: str | None = None, *, api_key: str | None = None) -> PhDRunner:

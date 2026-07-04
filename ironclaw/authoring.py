@@ -1,0 +1,202 @@
+"""LLM-authoring seams: turn plain language into the institute's structured work.
+
+Two authoring roles, both pluggable (LLM-backed in production, deterministic
+stand-ins in tests):
+
+- ``Decomposer`` — the PI turning a raw problem *statement* into projects and
+  tasks (each with checkable acceptance criteria). This is what lets a lab start
+  from a sentence instead of a hand-built ``Problem``.
+- ``TaskAuthor`` — the Senior rewriting a failed task (REFORMULATE) or splitting
+  it into subtasks (SPLIT). The deterministic supervision loop already routes to
+  these dispositions; the author supplies the new task *content*.
+
+The LLM implementations use structured outputs so the model returns validated
+JSON, not prose to parse.
+"""
+
+from __future__ import annotations
+
+from typing import Protocol
+
+from .agents.pi import Problem, ProjectSpec
+from .contracts import AcceptanceCriterion, CheckKind, Task
+from .observability import active_recorder
+
+
+class Decomposer(Protocol):
+    def __call__(self, statement: str) -> list[ProjectSpec]: ...
+
+
+class TaskAuthor(Protocol):
+    def reformulate(self, task: Task, diagnosis) -> Task: ...
+    def split(self, task: Task, diagnosis) -> list[Task]: ...
+
+
+def author_problem(statement: str, decomposer: Decomposer) -> Problem:
+    """PI entry point: a sentence in, a structured Problem out."""
+    projects = decomposer(statement)
+    active_recorder().emit(
+        "pi.decompose", role="pi", lab=statement,
+        data={"projects": [p.id for p in projects],
+              "tasks": sum(len(p.tasks) for p in projects)},
+    )
+    return Problem(statement=statement, projects=projects)
+
+
+# --------------------------------------------------------------------------- #
+# Structured-output schemas
+# --------------------------------------------------------------------------- #
+
+_ACCEPTANCE = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "properties": {
+            "description": {"type": "string"},
+            "kind": {"type": "string", "enum": ["file_exists", "command"]},
+            "spec": {"type": "string"},
+        },
+        "required": ["description", "kind", "spec"],
+        "additionalProperties": False,
+    },
+}
+
+_DECOMPOSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "projects": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "goal": {"type": "string"},
+                    "tasks": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "string"},
+                                "goal": {"type": "string"},
+                                "acceptance": _ACCEPTANCE,
+                            },
+                            "required": ["id", "goal", "acceptance"],
+                            "additionalProperties": False,
+                        },
+                    },
+                },
+                "required": ["id", "goal", "tasks"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["projects"],
+    "additionalProperties": False,
+}
+
+
+def _to_acceptance(items: list[dict]) -> list[AcceptanceCriterion]:
+    return [AcceptanceCriterion(i["description"], CheckKind(i["kind"]), i["spec"]) for i in items]
+
+
+def llm_decomposer(model: str = "claude-opus-4-8", *, api_key: str | None = None) -> Decomposer:
+    """PI decomposition on a strong model — the plan sets up everything below it."""
+    import json
+
+    import anthropic
+
+    client = anthropic.Anthropic(api_key=api_key)
+
+    def decompose(statement: str) -> list[ProjectSpec]:
+        prompt = (
+            f"You are the PI of a research lab. Decompose this problem into "
+            f"projects, each with concrete tasks. Every task must have "
+            f"mechanically-checkable acceptance criteria (a file that must exist, "
+            f"or a shell command that must exit 0). Problem:\n\n{statement}"
+        )
+        resp = client.messages.create(
+            model=model,
+            max_tokens=4096,
+            messages=[{"role": "user", "content": prompt}],
+            output_config={"format": {"type": "json_schema", "schema": _DECOMPOSE_SCHEMA}},
+        )
+        data = json.loads(next(b.text for b in resp.content if b.type == "text"))
+        return [
+            ProjectSpec(
+                id=p["id"],
+                goal=p["goal"],
+                tasks=[
+                    Task(goal=t["goal"], acceptance=_to_acceptance(t["acceptance"]), id=t["id"], project_id=p["id"])
+                    for t in p["tasks"]
+                ],
+            )
+            for p in data["projects"]
+        ]
+
+    return decompose
+
+
+def llm_task_author(model: str = "claude-opus-4-8", *, api_key: str | None = None) -> TaskAuthor:
+    """Senior authoring: rewrite a stuck task, or split it into subtasks."""
+    import json
+
+    import anthropic
+
+    client = anthropic.Anthropic(api_key=api_key)
+
+    class _Author:
+        def reformulate(self, task: Task, diagnosis) -> Task:
+            schema = {
+                "type": "object",
+                "properties": {"goal": {"type": "string"}, "acceptance": _ACCEPTANCE},
+                "required": ["goal", "acceptance"],
+                "additionalProperties": False,
+            }
+            prompt = (
+                f"A PhD could not complete this task:\n\nGoal: {task.goal}\n"
+                f"Why it failed: {getattr(diagnosis, 'notes', '')}\n\n"
+                "Rewrite it to be clearer and more achievable, keeping the same "
+                "intent. Return a new goal and mechanically-checkable acceptance criteria."
+            )
+            data = self._call(prompt, schema)
+            return Task(goal=data["goal"], acceptance=_to_acceptance(data["acceptance"]),
+                        inputs=task.inputs, project_id=task.project_id)
+
+        def split(self, task: Task, diagnosis) -> list[Task]:
+            schema = {
+                "type": "object",
+                "properties": {
+                    "subtasks": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {"id": {"type": "string"}, "goal": {"type": "string"}, "acceptance": _ACCEPTANCE},
+                            "required": ["id", "goal", "acceptance"],
+                            "additionalProperties": False,
+                        },
+                    }
+                },
+                "required": ["subtasks"],
+                "additionalProperties": False,
+            }
+            prompt = (
+                f"This task is too big for one PhD:\n\nGoal: {task.goal}\n"
+                f"Trouble: {getattr(diagnosis, 'notes', '')}\n\n"
+                "Split it into 2-4 smaller, independently-checkable subtasks."
+            )
+            data = self._call(prompt, schema)
+            return [
+                Task(goal=s["goal"], acceptance=_to_acceptance(s["acceptance"]), id=s["id"], project_id=task.project_id)
+                for s in data["subtasks"]
+            ]
+
+        def _call(self, prompt: str, schema: dict) -> dict:
+            resp = client.messages.create(
+                model=model,
+                max_tokens=2048,
+                messages=[{"role": "user", "content": prompt}],
+                output_config={"format": {"type": "json_schema", "schema": schema}},
+            )
+            return json.loads(next(b.text for b in resp.content if b.type == "text"))
+
+    return _Author()

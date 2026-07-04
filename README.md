@@ -32,10 +32,11 @@ infinite spend.
 
 Implemented and tested end-to-end with **no API key or network** — a
 deterministic `FakeProvider` drives the harness, so the mechanics are
-CI-testable and token-free. 50 tests, stdlib-only (the `anthropic` adapter is an
-optional extra). The full org — PI → Senior → Postdoc → PhD — runs top to bottom,
-emitting a live event stream the whole way, with an Infrastructure Manager
-custodian off to the side.
+CI-testable and token-free. 58 tests, stdlib-only (the `anthropic` adapter is an
+optional extra). A lab starts from a **sentence**, the full org — PI → Senior →
+Postdoc → PhD — runs top to bottom emitting a live event stream, a **TUI** folds
+that stream into a live tree, and an Infrastructure Manager custodian sits off to
+the side.
 
 ### PhD vertical slice ✅
 
@@ -104,6 +105,36 @@ scripted provider (`examples/run_phd_live.py`).
 > `submit_result`, and the loop escalated a *finished* task. Fixed — mechanical
 > verification, not the model's submit call, is the source of truth: at budget
 > exhaustion the loop passes work that satisfies the acceptance contract.
+
+### Start from a sentence: authoring + TUI ✅
+
+**LLM-authoring seams** (`ironclaw/authoring.py`) turn plain language into
+structured work — all pluggable, LLM-backed in production, deterministic in tests:
+
+- **PI decomposition** — `author_problem(statement, decomposer)` turns a *sentence*
+  into projects + tasks with checkable acceptance criteria. A lab no longer needs
+  a hand-built `Problem`.
+- **Senior authoring** — when a task fails, the Senior can **reformulate** it
+  (rewrite goal + criteria and relaunch) or **split** it into subtasks (supervised
+  recursively, depth-bounded; the parent passes iff every subtask does, else it
+  escalates to the PI). The `llm_*` implementations use structured outputs.
+
+**The TUI** (`ironclaw/tui.py`) is a pure *fold* over the event stream —
+`LabModel.apply` accumulates lab → project → task with ladders, review verdicts,
+cost, and the PI action list; `render` prints it; `LiveDashboard` redraws on each
+event; `TUIOverseer` shows the tree and prompts on escalations. Because it's a
+fold + render, it's fully testable with no terminal — and web/Telegram are the
+same fold, a different renderer. `demo_tui` runs sentence → lab → tree:
+
+```
+LAB [! escalated] Characterize the widget and stress-test the impossible case.
+  ✓ project characterize [passed]  measure the widget
+      ✓ measure     [passed] via cheapo
+  ! project stress [escalated]  find the breaking point
+      ✓ loadtest    [passed] via cheapo → moderate
+      ! impossible  [escalated] via cheapo → moderate
+  PI actions:  impossible → accept
+```
 
 ### Infrastructure Manager (custodian) ✅
 
@@ -217,6 +248,7 @@ python -m ironclaw.demo_scheduler  # backfill: CPU job not blocked behind GPU jo
 python -m ironclaw.demo_senior     # Senior closes the failure loop (relaunch ladder)
 python -m ironclaw.demo_lab        # full institute: PI -> Senior -> Postdoc -> PhD
 python -m ironclaw.demo_infra      # custodian: survey, onboard slurm, harvest, repair
+python -m ironclaw.demo_tui        # sentence -> decomposed lab -> rendered tree
 python -m unittest discover -s tests
 
 # live: a real cheap model drives the PhD slice (needs an API key)
@@ -232,12 +264,12 @@ ANTHROPIC_API_KEY=... python examples/run_phd_live.py claude-haiku-4-5
 - OpenAI / OpenRouter / self-hosted adapters behind the neutral interface (the
   Anthropic one is done), plus an inference-budget resource dimension
   (tokens/rate/$ per provider) — same lease pattern as compute.
-- **LLM-driven authoring** at the seams (all wired, deterministic today): the PI
-  authoring projects from a raw problem statement; the Senior authoring
-  reformulated/split tasks; the Postdoc's `llm_reviewer` in the loop.
+- Run the authoring seams **live** on a real model end-to-end (the `llm_*`
+  implementations exist; they need a key + a real task to exercise): PI
+  decomposition, Senior reformulate/split, the Postdoc's `llm_reviewer`.
 - An **LLM conversational front-end** for the Infrastructure Manager, so you talk
   to it in plain language (the capability methods and a `fixer`/`prober` seam are
   in place); real probers for slurm/ssh and an LLM `fixer` for broken skills.
-- UIs: web, TUI, Telegram — all consume the `observability` event stream and
-  drive the `Overseer` (PI) and the Infrastructure Manager admin methods that
-  already exist.
+- **Web / Telegram** front-ends — the same fold over the `observability` stream
+  the TUI already implements, driving the `Overseer` (PI) and IM admin methods;
+  plus the always-on daemon that owns the durable task store and scheduler.
