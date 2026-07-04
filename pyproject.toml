@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ironclaw"
+version = "0.0.1"
+description = "A multi-agent research institute"
+requires-python = ">=3.11"
+dependencies = []  # core is stdlib-only; provider adapters add optional extras
+
+[project.optional-dependencies]
+anthropic = ["anthropic>=0.40"]
+openai = ["openai>=1.40"]
+
+[tool.setuptools.packages.find]
+include = ["ironclaw*"]
